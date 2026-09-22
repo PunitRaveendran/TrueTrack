@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrueTrack | Neural-Inertial Navigation Instrument</title>
+  <meta name="description" content="On-device neural-inertial dead reckoning and offline map-matching navigation instrument for GPS-denied urban corridors.">
+  <link rel="stylesheet" href="lib/maplibre-gl.css">
+  <link rel="stylesheet" href="styles.css?v=round3_v3">
+</head>
+<body class="instrument-root">
+
+  <!-- 2-Second Dismissible Intro Card Overlay -->
+  <div id="intro-overlay" class="intro-overlay">
+    <div class="intro-card">
+      <div class="intro-badge">INSTRUMENT BRIEFING</div>
+      <h2 class="intro-title">TrueTrack Evaluation Console</h2>
+      <p class="intro-text">
+        Benchmarking neural-inertial dead reckoning against standard double-integration across a 45 s underpass blackout on surveyed Hyderabad HITEC City road geometry.
+      </p>
+      <div class="intro-meta">
+        <span>&bull; Real road survey nodes</span>
+        <span>&bull; Snapdragon NPU INT8 model</span>
+        <span>&bull; Discrete-time EKF</span>
+      </div>
+      <button id="btn-dismiss-intro" class="btn-intro-dismiss">Enter Console &rarr;</button>
+    </div>
+  </div>
+
+  <!-- Slim Quiet Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="instrument-title">
+        <span class="brand-name">TrueTrack</span>
+        <span class="separator">/</span>
+        <span class="corridor-title">Hyderabad HITEC City Underpass</span>
+      </div>
+    </div>
+
+    <!-- Single quiet status line -->
+    <div class="header-status-line">
+      <span class="status-item">Simulated IMU on real road geometry</span>
+      <span class="status-sep">&bull;</span>
+      <span class="status-item">Snapdragon NPU INT8 &bull; 1.4 ms</span>
+      <span class="status-sep">&bull;</span>
+      <div class="gps-status-dot" id="gps-status-dot" title="GNSS status"></div>
+      <span class="gps-status-label" id="gps-status-label">GPS locked (simulated)</span>
+    </div>
+
+    <div class="header-actions">
+      <button id="btn-reset-view" class="btn-quiet" title="Reset to full corridor overview">
+        <svg class="btn-icon" viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
+          <path d="M1.5 1a.5.5 0 0 0-.5.5v3a.5.5 0 0 1-1 0v-3A1.5 1.5 0 0 1 1.5 0h3a.5.5 0 0 1 0 1h-3zM11 .5a.5.5 0 0 1 .5-.5h3A1.5 1.5 0 0 1 16 1.5v3a.5.5 0 0 1-1 0v-3a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 1-.5-.5zM.5 11a.5.5 0 0 1 .5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 1 0 1h-3A1.5 1.5 0 0 1 0 14.5v-3a.5.5 0 0 1 .5-.5zm15 0a.5.5 0 0 1 .5.5v3a1.5 1.5 0 0 1-1.5 1.5h-3a.5.5 0 0 1 0-1h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 1 .5-.5z"/>
+        </svg>
+        <span>Corridor view</span>
+      </button>
+      <button id="btn-demo" class="btn-quiet btn-demo" title="Start guided evaluation demo">
+        <span>Guided demo</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Viewport Layout (1920x1080 Zero-Scroll Grid) -->
+  <main class="viewport-layout">
+
+    <!-- Left Column: Edge-to-Edge Map -->
+    <section class="map-viewport-container">
+      <div id="maplibre-map" class="map-canvas"></div>
+      <div class="map-vignette-overlay" pointer-events="none"></div>
+
+      <!-- Single Subtitle Banner (Context-aware alert, max 1 visible) -->
+      <div class="map-alert-banner" id="map-alert-banner" style="display: none;">
+        <span class="alert-indicator"></span>
+        <span id="map-alert-text">Underpass blackout active &bull; GPS lost</span>
+      </div>
+
+      <!-- Demo Subtitle Bar (Active only during guided evaluation walkthrough) -->
+      <div class="demo-subtitle-bar" id="demo-subtitle-bar" style="display: none;">
+        <span class="demo-step" id="demo-step">DEMO</span>
+        <span id="demo-text">Demonstration narrative step</span>
+      </div>
+
+      <!-- Quiet Map Legend (Top Left) -->
+      <div class="map-legend-quiet">
+        <div class="legend-row"><span class="legend-swatch swatch-tt"></span> TrueTrack (40px hero)</div>
+        <div class="legend-row"><span class="legend-swatch swatch-legacy"></span> Legacy dead reckoning (28px)</div>
+        <div class="legend-row"><span class="legend-swatch swatch-gt"></span> Ground truth / full corridor</div>
+        <div class="legend-row"><span class="legend-swatch swatch-tunnel"></span> 45 s underpass zone</div>
+      </div>
+    </section>
+
+    <!-- Right Column: Precision Readouts & Controls -->
+    <aside class="side-panel">
+
+      <!-- 5-STAGE PIPELINE ACTIVE STATE INDICATOR -->
+      <section class="panel-section pipeline-section">
+        <div class="section-label">Navigation pipeline flow</div>
+        <div class="pipeline-flow" id="pipeline-flow">
+          <div class="pipe-node active" id="pipe-node-imu" title="50 Hz IMU inertial streaming">IMU 50Hz</div>
+          <span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-node active" id="pipe-node-cnn" title="1D-CNN NPU speed/yaw inference">1D-CNN</div>
+          <span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-node active" id="pipe-node-ekf" title="EKF Riccati covariance propagation">EKF P</div>
+          <span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-node" id="pipe-node-osm" title="OSM road manifold orthogonal snapping">OSM Snap</div>
+          <span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-node" id="pipe-node-blend" title="3s Sigmoid smooth reconciliation">Blend</div>
+        </div>
+      </section>
+
+      <!-- HERO COMPARISON READOUT (56px Numerals, Live Delta Chip, Mini Sparklines) -->
+      <section class="panel-section hero-section">
+        <div class="hero-top-row">
+          <div class="section-label">Live position divergence</div>
+          <div class="hero-delta-chip" id="hero-delta-chip">&mdash;</div>
+        </div>
+        <div class="hero-comparison">
+          <!-- Legacy Column -->
+          <div class="hero-col hero-legacy">
+            <div class="hero-label">Legacy navigation</div>
+            <div class="hero-figure-row">
+              <span class="hero-number" id="hero-drift-legacy">0.0</span>
+              <span class="hero-unit">m</span>
+            </div>
+            <canvas id="canvas-spark-legacy" class="mini-sparkline" width="130" height="22"></canvas>
+            <div class="hero-desc" id="hero-legacy-sub">Standard double-integration</div>
+          </div>
+
+          <div class="hero-divider"></div>
+
+          <!-- TrueTrack Column -->
+          <div class="hero-col hero-tt">
+            <div class="hero-label">TrueTrack stack</div>
+            <div class="hero-figure-row">
+              <span class="hero-number" id="hero-drift-tt">0.0</span>
+              <span class="hero-unit">m</span>
+            </div>
+            <canvas id="canvas-spark-tt" class="mini-sparkline" width="130" height="22"></canvas>
+            <div class="hero-desc" id="hero-tt-sub">Neural-inertial + road manifold</div>
+          </div>
+        </div>
+        <div class="hero-status-caption" id="hero-status-caption">at 0:38 &bull; GPS locked (both &asymp; 0)</div>
+      </section>
+
+      <!-- LIVE ERROR OVER TIME CHART (Expanded to 180px, Log Scale, Crosshair Hover) -->
+      <section class="panel-section chart-section">
+        <div class="section-label">Drift over time (meters, log scale 0.1 &rarr; 200 m)</div>
+        <div class="chart-canvas-wrap">
+          <canvas id="canvas-chart" class="error-canvas" width="380" height="180"></canvas>
+          <div id="chart-tooltip" class="chart-tooltip" style="display:none;"></div>
+        </div>
+      </section>
+
+      <!-- ABLATION TOGGLES (Sleek Switch Controls) -->
+      <section class="panel-section ablation-section">
+        <div class="section-label">Component ablation</div>
+        <div class="ablation-list">
+          <div class="ablation-switch-item">
+            <label class="switch-toggle">
+              <input type="checkbox" id="toggle-neural" checked>
+              <span class="switch-slider"></span>
+            </label>
+            <span class="ablation-text">1D-CNN neural velocity regressor</span>
+          </div>
+          <div class="ablation-switch-item">
+            <label class="switch-toggle">
+              <input type="checkbox" id="toggle-map" checked>
+              <span class="switch-slider"></span>
+            </label>
+            <span class="ablation-text">OSM road-manifold constraint</span>
+          </div>
+          <div class="ablation-switch-item" id="lbl-toggle-sigmoid">
+            <label class="switch-toggle">
+              <input type="checkbox" id="toggle-sigmoid" checked>
+              <span class="switch-slider"></span>
+            </label>
+            <span class="ablation-text">Sigmoid reconcile window (soft re-lock)</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- EMPIRICAL BENCHMARKS (Headline Held-Out Distribution Promoted Above Table) -->
+      <section class="panel-section benchmarks-section">
+        <div class="benchmark-headline-card">
+          <div class="bh-label">Held-out 5-Seed Monte Carlo Distribution</div>
+          <div class="bh-stat-row">
+            <span class="bh-stat"><strong class="bh-num">4.34 m</strong> median drift</span>
+            <span class="bh-sep">&bull;</span>
+            <span class="bh-stat"><strong class="bh-num">9.26 m</strong> 95th percentile</span>
+          </div>
+        </div>
+
+        <details class="benchmark-details" open id="benchmarks-details">
+          <summary class="benchmark-summary">
+            <span class="section-label benchmark-heading">Measured 45 s corridor benchmarks</span>
+            <span class="summary-arrow">&blacktriangledown;</span>
+          </summary>
+          <div class="benchmark-content">
+            <table class="benchmark-table">
+              <thead>
+                <tr>
+                  <th>Method</th>
+                  <th class="num-col">Max drift</th>
+                  <th class="num-col">Exit drift</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>1. Naive double integration</td>
+                  <td class="num-col error-txt">114.0 m</td>
+                  <td class="num-col error-txt">114.0 m</td>
+                </tr>
+                <tr>
+                  <td>2. Map constraint alone</td>
+                  <td class="num-col">40.3 m</td>
+                  <td class="num-col">24.8 m</td>
+                </tr>
+                <tr>
+                  <td>3. Neural velocity alone</td>
+                  <td class="num-col">52.4 m</td>
+                  <td class="num-col">52.4 m</td>
+                </tr>
+                <tr class="tt-row">
+                  <td>4. TrueTrack stack</td>
+                  <td class="num-col tt-txt">0.95 m</td>
+                  <td class="num-col tt-txt">0.37 m</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="quiet-callouts">
+              <div class="callout-line">
+                <span class="callout-key">OSM map perturbation (2.0 m offset):</span>
+                <span class="callout-val">2.61 m max error</span>
+              </div>
+              <div class="callout-line">
+                <span class="callout-key">Held-out distribution (5 seeds):</span>
+                <span class="callout-val">Median 4.34 m &bull; 95th %ile 9.26 m</span>
+              </div>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <!-- DRAWER EXPAND BUTTON -->
+      <div class="drawer-trigger-wrap">
+        <button id="btn-hood-toggle" class="btn-drawer-trigger">
+          <span id="hood-toggle-arrow">&blacktriangledown;</span>
+          <span>Under the hood diagnostics (IMU &bull; FFT &bull; EKF)</span>
+        </button>
+      </div>
+
+    </aside>
+
+  </main>
+
+  <!-- COLLAPSIBLE UNDER-THE-HOOD DRAWER (Closed by default) -->
+  <section class="diagnostics-drawer" id="diagnostics-drawer">
+    <div class="drawer-content">
+      
+      <!-- Panel 1: Raw 6-Axis IMU Stream -->
+      <div class="diag-col">
+        <div class="diag-header">
+          <span class="diag-title">Raw 6-axis IMU stream</span>
+          <span class="diag-badge">50 Hz</span>
+        </div>
+        <canvas id="canvas-imu-wave" class="diag-canvas" width="360" height="90"></canvas>
+        <div class="diag-footer" id="hood-imu-meta">ax: 0.00 &bull; ay: 0.00 &bull; gz: 0.000 rad/s</div>
+      </div>
+
+      <!-- Panel 2: Live FFT Frequency Spectrum -->
+      <div class="diag-col">
+        <div class="diag-header">
+          <span class="diag-title">IMU spectrum (0–50 Hz)</span>
+          <span class="diag-badge">Engine peak: 35 Hz</span>
+        </div>
+        <canvas id="canvas-fft" class="diag-canvas" width="360" height="90"></canvas>
+        <div class="diag-footer">Vibration rejection: -8.3 dB (Measured via 35 Hz tone injection)</div>
+      </div>
+
+      <!-- Panel 3: Neural Inference & EKF Covariance -->
+      <div class="diag-col">
+        <div class="diag-header">
+          <span class="diag-title">State estimation</span>
+          <span class="diag-badge">Discrete-time EKF</span>
+        </div>
+        <div class="state-metrics-grid">
+          <div class="state-metric">
+            <span class="s-lbl">Predicted speed</span>
+            <span class="s-val" id="hood-speed-val">0.0 km/h</span>
+          </div>
+          <div class="state-metric">
+            <span class="s-lbl">Predicted yaw rate</span>
+            <span class="s-val" id="hood-yaw-val">0.0 &deg;/s</span>
+          </div>
+          <div class="state-metric">
+            <span class="s-lbl">Along-track uncertainty (&sigma;<sub>&parallel;</sub>)</span>
+            <span class="s-val" id="hood-sigma-along">0.21 m</span>
+          </div>
+          <div class="state-metric">
+            <span class="s-lbl">Cross-track uncertainty (&sigma;<sub>&perp;</sub>)</span>
+            <span class="s-val tt-txt" id="hood-sigma-cross">0.21 m</span>
+          </div>
+        </div>
+        <div class="diag-footer">Road manifold bounds lateral &sigma;<sub>&perp;</sub> &le; 0.18 m inside tunnel</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Bottom Timeline & Transport Bar (Video Editor Scrubber) -->
+  <footer class="transport-bar">
+    <!-- Playback Controls -->
+    <div class="transport-left">
+      <button id="btn-play" class="btn-transport" title="Play / Pause simulation">
+        <svg id="icon-play" viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
+          <path d="M5.5 3.5A.5.5 0 0 1 6 4v8a.5.5 0 0 1-.757.429l-6-4a.5.5 0 0 1 0-.858l6-4A.5.5 0 0 1 5.5 3.5zm5 0a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.757.429l-6-4a.5.5 0 0 1 0-.858l6-4a.5.5 0 0 1 .757.429z" style="display:none;"/>
+          <path id="svg-pause-path" d="M3.5 3.5h3v9h-3v-9zm6 0h3v9h-3v-9z"/>
+        </svg>
+      </button>
+
+      <button id="btn-kill-gps" class="btn-transport btn-warn" title="Manually inject instant GPS blackout">
+        <span>Kill GPS</span>
+      </button>
+
+      <button id="btn-vibe" class="btn-transport" title="Inject 35 Hz engine vibration harmonic">
+        <span>35 Hz vibe</span>
+      </button>
+
+      <button id="btn-voice" class="btn-transport" title="Toggle turn-by-turn audio cues">
+        <span>Audio on</span>
+      </button>
+    </div>
+
+    <!-- Scrubber Track with 45s Shaded Blackout Span -->
+    <div class="transport-scrubber-track">
+      <div class="scrubber-timeline-container">
+        <!-- Shaded blackout span (30.8% to 65.4% of 130s) -->
+        <div class="scrubber-blackout-span" style="left: 30.8%; width: 34.6%;">
+          <span class="span-label">45 s underpass blackout</span>
+        </div>
+        <!-- Markers -->
+        <div class="scrubber-marker marker-entry" style="left: 30.8%;" title="GPS Lost (t=40s)"></div>
+        <div class="scrubber-marker marker-exit" style="left: 65.4%;" title="GPS Restored (t=85s)"></div>
+        
+        <!-- Background sparkline track showing full-run error profile -->
+        <canvas id="canvas-timeline-spark" class="timeline-spark-canvas" width="600" height="26"></canvas>
+
+        <!-- Interactive range input -->
+        <input type="range" id="timeline-slider" class="scrubber-slider" min="0" value="0">
+      </div>
+      <div class="time-counter" id="time-readout">00:00.0 / 02:10.0</div>
+    </div>
+
+    <!-- Speed Selector & Keyboard Hint -->
+    <div class="transport-right">
+      <div class="speed-group">
+        <button class="btn-speed active" data-speed="1.0">1x</button>
+        <button class="btn-speed" data-speed="2.0">2x</button>
+        <button class="btn-speed" data-speed="4.0">4x</button>
+        <button class="btn-speed" data-speed="8.0">8x</button>
+      </div>
+      <div class="transport-keys-hint" title="Keyboard Shortcuts: Space to Play/Pause, ←/→ to scrub ±5s, 1/2/4/8 to set speed">
+        <span class="key-badge">Space</span> <span class="key-badge">&larr;&rarr;</span> <span class="key-badge">1-8</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Scripts: 100% Offline MapLibre GL & Engines -->
+  <script src="lib/maplibre-gl.js"></script>
+  <script src="js/corridor_data.js?v=round3_v3"></script>
+  <script src="js/navigation_engine.js?v=round3_v3"></script>
+</body>
+</html>

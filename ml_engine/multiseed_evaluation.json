@@ -1,0 +1,32 @@
+{
+  "runs": [
+    {
+      "seed": 42,
+      "max_error_m": 10.17,
+      "end_error_m": 10.17
+    },
+    {
+      "seed": 101,
+      "max_error_m": 5.64,
+      "end_error_m": 5.64
+    },
+    {
+      "seed": 2024,
+      "max_error_m": 3.56,
+      "end_error_m": 3.56
+    },
+    {
+      "seed": 777,
+      "max_error_m": 3.74,
+      "end_error_m": 3.74
+    },
+    {
+      "seed": 999,
+      "max_error_m": 4.34,
+      "end_error_m": 4.34
+    }
+  ],
+  "median_max_error_m": 4.34,
+  "p95_max_error_m": 9.26,
+  "worst_case_max_error_m": 10.17
+}

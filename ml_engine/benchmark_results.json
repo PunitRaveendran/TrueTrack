@@ -1,0 +1,54 @@
+{
+  "blackout_duration_sec": 45.0,
+  "sampling_frequency_hz": 50,
+  "input_channels": 6,
+  "lane_half_width_constraint_m": 1.8,
+  "normalization": "Per-channel Z-score",
+  "parameters_grounding": "Single-cylinder 2-wheeler primary 1st-order rotational vibration (25-45Hz) + ISO 8608 road roughness",
+  "results": {
+    "1_naive_double_integration": {
+      "description": "Classical double-integration (no neural filter, no map)",
+      "max_total_error_m": 114.0,
+      "end_of_blackout_total_error_m": 114.0,
+      "max_along_track_longitudinal_m": 40.25,
+      "max_cross_track_lateral_m": 111.28,
+      "end_along_track_m": 24.74,
+      "end_cross_track_m": 111.28,
+      "rmse_m": 49.3,
+      "avg_drift_rate_m_per_sec": 2.533
+    },
+    "2_naive_plus_map_manifold": {
+      "description": "Classical double-integration + road manifold constraint (Ablation: Map Alone)",
+      "max_total_error_m": 40.29,
+      "end_of_blackout_total_error_m": 24.8,
+      "max_along_track_longitudinal_m": 40.25,
+      "max_cross_track_lateral_m": 1.8,
+      "end_along_track_m": 24.74,
+      "end_cross_track_m": 1.8,
+      "rmse_m": 16.24,
+      "avg_drift_rate_m_per_sec": 0.551
+    },
+    "3_neural_velocity_alone": {
+      "description": "Normalized 6-axis 1D-CNN (Neural speed & yaw, no map constraint)",
+      "max_total_error_m": 52.4,
+      "end_of_blackout_total_error_m": 52.4,
+      "max_along_track_longitudinal_m": 13.24,
+      "max_cross_track_lateral_m": 52.09,
+      "end_along_track_m": 5.64,
+      "end_cross_track_m": 52.09,
+      "rmse_m": 28.94,
+      "avg_drift_rate_m_per_sec": 1.164
+    },
+    "4_truetrack_full_stack": {
+      "description": "Neural velocity + EKF road manifold constraint (Full Pipeline)",
+      "max_total_error_m": 0.95,
+      "end_of_blackout_total_error_m": 0.37,
+      "max_along_track_longitudinal_m": 0.94,
+      "max_cross_track_lateral_m": 0.37,
+      "end_along_track_m": 0.12,
+      "end_cross_track_m": 0.34,
+      "rmse_m": 0.52,
+      "avg_drift_rate_m_per_sec": 0.008
+    }
+  }
+}

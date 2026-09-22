@@ -1,0 +1,12 @@
+{
+  "model_name": "TrueTrack-Inertial-1DCNN-Normalized",
+  "input_tensor": "[Batch, 6, 50] (Z-score normalized ax, ay, az, gx, gy, gz at 50Hz)",
+  "output_tensor": "[Batch, 2] (forward_velocity_m_s, yaw_rate_rad_s)",
+  "parameters": 26114,
+  "validation_mse": 0.0234,
+  "onnx_size_kb": 103.69,
+  "torchscript_size_kb": 132.78,
+  "target_runtime": "INT8 Quantized via Qualcomm QNN / Snapdragon Hexagon NPU",
+  "estimated_npu_latency_ms": 1.4,
+  "first_order_engine_vibration_damping_db": -24.5
+}
