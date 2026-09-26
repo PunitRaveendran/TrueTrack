@@ -25,6 +25,7 @@ import androidx.core.content.ContextCompat
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import org.json.JSONArray
 import org.json.JSONObject
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -41,6 +42,27 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
+
+/**
+ * Data frame for corridor flight-recorder simulation.
+ */
+data class TelemetryFrame(
+    val t: Float,
+    val speedKmh: Float,
+    val headingDeg: Float,
+    val isBlackout: Boolean,
+    val gtLat: Double,
+    val gtLon: Double,
+    val naiveLat: Double,
+    val naiveLon: Double,
+    val trueTrackLat: Double,
+    val trueTrackLon: Double,
+    val errNaiveM: Float,
+    val errTrueTrackM: Float,
+    val ax: Float,
+    val ay: Float,
+    val gz: Float
+)
 
 /**
  * TrueTrack - Android Navigation Instrument Activity
@@ -90,8 +112,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var useLeanCorrection = true
     private var lastInferenceTimeMs = 0L
     private var lastNpuLatencyMs = 1.4f
-    private var isDemoMode = false
-    private var demoProgress = 0.0f
+
+    // Simulation Data & Playback Engine
+    private val simulationFrames = mutableListOf<TelemetryFrame>()
+    private var simFrameIndex = 350 // Start 3 seconds before underpass blackout (t=35s)
+    private var isDemoMode = true    // DEFAULT TO SIMULATION for reliable demonstration
 
     // UI View References
     private lateinit var tvSpeed: TextView
@@ -166,6 +191,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         initViews()
         requestLocationPermissions()
         preloadOfflineTiles()
+        loadSimulationTelemetry()
         initMap()
         loadNormalizationStats()
         initOnnxModel()
@@ -219,6 +245,42 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 
+    private fun loadSimulationTelemetry() {
+        try {
+            val jsonString = assets.open("corridor_telemetry.json").bufferedReader().use { it.readText() }
+            val jsonArray = JSONArray(jsonString)
+            simulationFrames.clear()
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                val gt = obj.getJSONArray("gt")
+                val naive = obj.getJSONArray("naive")
+                val tt = obj.getJSONArray("truetrack")
+                simulationFrames.add(
+                    TelemetryFrame(
+                        t = obj.getDouble("t").toFloat(),
+                        speedKmh = obj.getDouble("speed_kmh").toFloat(),
+                        headingDeg = obj.getDouble("heading_deg").toFloat(),
+                        isBlackout = obj.getInt("is_blackout") == 1,
+                        gtLat = gt.getDouble(0),
+                        gtLon = gt.getDouble(1),
+                        naiveLat = naive.getDouble(0),
+                        naiveLon = naive.getDouble(1),
+                        trueTrackLat = tt.getDouble(0),
+                        trueTrackLon = tt.getDouble(1),
+                        errNaiveM = obj.getDouble("err_naive_m").toFloat(),
+                        errTrueTrackM = obj.getDouble("err_truetrack_m").toFloat(),
+                        ax = obj.optDouble("raw_imu_ax", 0.0).toFloat(),
+                        ay = obj.optDouble("raw_imu_ay", 0.0).toFloat(),
+                        gz = obj.optDouble("raw_imu_gz", 0.0).toFloat()
+                    )
+                )
+            }
+            Log.i("MainActivity", "Loaded ${simulationFrames.size} simulation telemetry frames")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to load corridor_telemetry.json", e)
+        }
+    }
+
     private fun initViews() {
         tvSpeed = findViewById(R.id.tvSpeed)
         tvLeanAngle = findViewById(R.id.tvLeanAngle)
@@ -242,19 +304,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         btnKillGps.setOnClickListener { toggleGpsBlackout() }
 
+        // Start with SIMULATION active
+        btnDemoMode.text = "MODE: SIMULATION"
+        btnDemoMode.setTextColor(Color.parseColor("#38BDF8"))
+
         btnDemoMode.setOnClickListener {
             isDemoMode = !isDemoMode
-            demoProgress = 0.0f
             trueTrackPoints.clear()
             driftPoints.clear()
             trueTrackPolyline.setPoints(trueTrackPoints)
             driftPolyline.setPoints(driftPoints)
 
             if (isDemoMode) {
-                btnDemoMode.text = "CORRIDOR: SIM"
+                simFrameIndex = 350
+                btnDemoMode.text = "MODE: SIMULATION"
                 btnDemoMode.setTextColor(Color.parseColor("#38BDF8"))
             } else {
-                btnDemoMode.text = "CORRIDOR: LIVE"
+                btnDemoMode.text = "MODE: LIVE SENSOR"
                 btnDemoMode.setTextColor(Color.parseColor("#94A3B8"))
             }
         }
@@ -426,7 +492,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             }
         }
 
-        // Process frame on accelerometer tick
+        // Process frame on accelerometer tick (50 Hz)
         if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
             processSensorTick()
         }
@@ -458,7 +524,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         bufferHead = (bufferHead + 1) % windowSize
         samplesCollected++
 
-        // Run NPU inference every 10 samples (5 Hz / 100ms)
+        // Run inference or simulation step every 10 samples (5 Hz / 100ms)
         val now = SystemClock.elapsedRealtime()
         if (samplesCollected >= windowSize && now - lastInferenceTimeMs >= 100) {
             lastInferenceTimeMs = now
@@ -469,21 +535,48 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private fun runInference(currentPhiRad: Float, axIn: Float, ayIn: Float, azIn: Float) {
         val startTime = SystemClock.elapsedRealtimeNanos()
 
-        // 3D Acceleration Magnitude & G-Force
+        // 3D Acceleration Magnitude & G-Force from live sensor
         val accelMag = sqrt(rawAx * rawAx + rawAy * rawAy + rawAz * rawAz)
         val gyroMag = sqrt(rawGx * rawGx + rawGy * rawGy + rawGz * rawGz)
         val isStationary = abs(accelMag - 9.80665f) < 0.65f && gyroMag < 0.18f
 
         var speedKmh = 0.0f
         var yawRateDeg = 0.0f
+        var displayLeanDeg = Math.toDegrees(currentPhiRad.toDouble()).toFloat()
 
-        if (isDemoMode) {
-            // Simulated HITEC City Corridor Flight Recording
-            speedKmh = 41.2f
-            demoProgress += 0.005f
-            if (demoProgress > 1.0f) demoProgress = 0.0f
+        if (isDemoMode && simulationFrames.isNotEmpty()) {
+            // ==========================================
+            // FLIGHT RECORDER CORRIDOR SIMULATION MODE
+            // ==========================================
+            val frame = simulationFrames[simFrameIndex]
+            simFrameIndex = (simFrameIndex + 1) % simulationFrames.size
+
+            speedKmh = frame.speedKmh
+            yawRateDeg = Math.toDegrees(frame.gz.toDouble()).toFloat()
+
+            // Lean angle: responsive to live phone tilt if user tilts phone, otherwise follows vehicle yaw
+            val liveLean = Math.toDegrees(currentPhiRad.toDouble()).toFloat()
+            displayLeanDeg = if (abs(liveLean) > 3.0f) liveLean else (yawRateDeg * 0.40f).coerceIn(-35f, 35f)
+
+            drLat = frame.trueTrackLat
+            drLon = frame.trueTrackLon
+            drHeadingDeg = frame.headingDeg.toDouble()
+            naiveLat = frame.naiveLat
+            naiveLon = frame.naiveLon
+
+            // Trigger blackout state according to corridor run or manual toggle
+            val activeBlackout = frame.isBlackout || isBlackout
+            if (activeBlackout && !isBlackout) {
+                isBlackout = true
+                blackoutStartTimeMs = SystemClock.elapsedRealtime()
+                audioManager.onBlackoutEntered()
+            }
+
+            lastNpuLatencyMs = 1.4f
         } else if (!isStationary && ortSession != null && ortEnv != null) {
-            // Live Movement detected -> Run Qualcomm Hexagon / CPU ONNX model
+            // ==========================================
+            // LIVE SENSOR MODE (Movement detected)
+            // ==========================================
             try {
                 val tensorBuffer = FloatBuffer.allocate(numChannels * windowSize)
                 for (c in 0 until numChannels) {
@@ -514,17 +607,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 Log.e("MainActivity", "NPU inference error: ${e.message}")
             }
         } else {
-            // Stationary Zero-Velocity Update (ZUPT): clean 0.0 km/h, no jitter
+            // ==========================================
+            // LIVE SENSOR MODE (Stationary Zero-Velocity Update)
+            // ==========================================
             speedKmh = 0.0f
             yawRateDeg = 0.0f
             lastNpuLatencyMs = 1.4f
         }
 
-        val leanDeg = Math.toDegrees(currentPhiRad.toDouble()).toFloat()
-
         // Update UI & Map on Main Thread
         runOnUiThread {
-            updateDashboard(speedKmh, yawRateDeg, leanDeg, axIn, ayIn, azIn, accelMag)
+            updateDashboard(speedKmh, yawRateDeg, displayLeanDeg, accelMag)
         }
 
         // Broadcast to Laptop Web Cockpit via WebSocket
@@ -532,7 +625,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             timestampMs = System.currentTimeMillis(),
             speedKmh = speedKmh,
             yawRateDeg = yawRateDeg,
-            leanDeg = leanDeg,
+            leanDeg = displayLeanDeg,
             isBlackout = isBlackout,
             npuLatencyMs = lastNpuLatencyMs,
             ax = axIn,
@@ -545,9 +638,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         speedKmh: Float,
         yawRateDeg: Float,
         leanDeg: Float,
-        ax: Float,
-        ay: Float,
-        az: Float,
         accelMag: Float
     ) {
         tvSpeed.text = String.format(Locale.US, "%.1f", speedKmh)
@@ -567,8 +657,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         if (isBlackout) {
             val elapsedSec = (SystemClock.elapsedRealtime() - blackoutStartTimeMs) / 1000
             tvBlackoutTimer.text = String.format(Locale.US, "+%02d s", elapsedSec)
+            btnKillGps.text = "RESTORE GPS FIX"
+            btnKillGps.backgroundTintList = getColorStateList(R.color.status_green)
+            tvGpsStatus.text = "GNSS: BLACKOUT ACTIVE (Neural DR)"
+            tvGpsStatus.setTextColor(Color.parseColor("#EF4444"))
         } else {
             tvBlackoutTimer.text = "00:00"
+            btnKillGps.text = "KILL GPS FIX (SIMULATE BLACKOUT)"
+            btnKillGps.backgroundTintList = getColorStateList(R.color.alert_red)
+            tvGpsStatus.text = "GNSS: LOCKED (50 Hz SENSOR/SIM)"
+            tvGpsStatus.setTextColor(Color.parseColor("#10B981"))
         }
 
         // 3D Acceleration, decomposed vector axes, and total gravity magnitude
@@ -587,38 +685,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val dt = 0.1
 
         if (isDemoMode) {
-            // Advance along real HITEC City Road corridor
-            val totalSegments = corridorWaypoints.size - 1
-            val floatIdx = demoProgress * totalSegments
-            val segIdx = floatIdx.toInt().coerceIn(0, totalSegments - 1)
-            val segFraction = (floatIdx - segIdx).toDouble()
-
-            val p0 = corridorWaypoints[segIdx]
-            val p1 = corridorWaypoints[segIdx + 1]
-
-            drLat = p0.latitude + (p1.latitude - p0.latitude) * segFraction
-            drLon = p0.longitude + (p1.longitude - p0.longitude) * segFraction
-
-            // Heading along road segment
-            val dLat = p1.latitude - p0.latitude
-            val dLon = p1.longitude - p0.longitude
-            drHeadingDeg = Math.toDegrees(kotlin.math.atan2(dLon, dLat))
-
             val currentPoint = GeoPoint(drLat, drLon)
             trueTrackPoints.add(currentPoint)
-            if (trueTrackPoints.size > 200) trueTrackPoints.removeAt(0)
+            if (trueTrackPoints.size > 250) trueTrackPoints.removeAt(0)
             trueTrackPolyline.setPoints(trueTrackPoints)
 
             if (isBlackout) {
-                // Naive quadratic uncorrected IMU bias drift (curves off into buildings)
-                val elapsedSec = (SystemClock.elapsedRealtime() - blackoutStartTimeMs) / 1000.0
-                val driftMeters = 0.5 * 0.12 * elapsedSec * elapsedSec
-                // Offset perpendicular to heading (East/Right into buildings)
-                val driftDeg = driftMeters * 0.000009
-                naiveLat = drLat - driftDeg * 0.3
-                naiveLon = drLon + driftDeg * 0.95
                 driftPoints.add(GeoPoint(naiveLat, naiveLon))
-                if (driftPoints.size > 200) driftPoints.removeAt(0)
+                if (driftPoints.size > 250) driftPoints.removeAt(0)
                 driftPolyline.setPoints(driftPoints)
 
                 tvMapStatus.text = "GPS BLACKOUT • NEURAL DR ACTIVE"
@@ -699,17 +773,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         isBlackout = !isBlackout
         if (isBlackout) {
             blackoutStartTimeMs = SystemClock.elapsedRealtime()
-            btnKillGps.text = "RESTORE GPS FIX"
-            btnKillGps.backgroundTintList = getColorStateList(R.color.status_green)
-            tvGpsStatus.text = "GNSS: BLACKOUT ACTIVE (Neural DR)"
-            tvGpsStatus.setTextColor(Color.parseColor("#EF4444"))
             audioManager.onBlackoutEntered()
         } else {
-            btnKillGps.text = "KILL GPS FIX (SIMULATE BLACKOUT)"
-            btnKillGps.backgroundTintList = getColorStateList(R.color.alert_red)
-            tvGpsStatus.text = "GNSS: LOCKED (50 Hz SENSOR/SIM)"
-            tvGpsStatus.setTextColor(Color.parseColor("#10B981"))
             audioManager.onGpsRestored()
+            driftPoints.clear()
+            driftPolyline.setPoints(driftPoints)
         }
     }
 
