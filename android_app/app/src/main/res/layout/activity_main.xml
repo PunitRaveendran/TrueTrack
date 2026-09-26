@@ -195,11 +195,15 @@
             android:padding="12dp"
             android:orientation="vertical">
             <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:text="YAW RATE (ω_z)"
                 android:textSize="11sp"
                 android:textColor="@color/text_secondary" />
             <TextView
                 android:id="@+id/tvYawRate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:text="4.2 °/s"
                 android:textSize="18sp"
                 android:textColor="@color/text_primary"
@@ -216,11 +220,15 @@
             android:padding="12dp"
             android:orientation="vertical">
             <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:text="LATERAL CONSTRAINT"
                 android:textSize="11sp"
                 android:textColor="@color/text_secondary" />
             <TextView
                 android:id="@+id/tvLateralConstraint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:text="IRC:86 (≤1.8m)"
                 android:textSize="18sp"
                 android:textColor="@color/status_green"
@@ -238,11 +246,15 @@
             android:padding="12dp"
             android:orientation="vertical">
             <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:text="DRIFT RATE"
                 android:textSize="11sp"
                 android:textColor="@color/text_secondary" />
             <TextView
                 android:id="@+id/tvDriftRate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:text="0.008 m/s"
                 android:textSize="18sp"
                 android:textColor="@color/accent_blue"
@@ -260,11 +272,15 @@
             android:padding="12dp"
             android:orientation="vertical">
             <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:text="DUAL-SCREEN BRIDGE"
                 android:textSize="11sp"
                 android:textColor="@color/text_secondary" />
             <TextView
                 android:id="@+id/tvServerStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:text="ws://*:8765"
                 android:textSize="16sp"
                 android:textColor="@color/text_primary"
