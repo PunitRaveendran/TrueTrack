@@ -45,6 +45,8 @@ scratch/
 .gradle/
 android_app/.gradle/
 android_app/local.properties
+**/local.properties
+**/build/
 android_app/**/build/
 .cxx/
 *.apk
@@ -52,3 +54,6 @@ android_app/**/build/
 
 # Large archive files (extracted directories are tracked directly)
 *.zip
+
+# Generated training batches (re-generatable via physics_grounded_generator.py)
+ml_engine/synthetic_batch/
