@@ -403,17 +403,17 @@
         </FrameLayout>
     </com.google.android.material.card.MaterialCardView>
 
-    <!-- Raw Diagnostics Line -->
+    <!-- Raw 3D Diagnostics Line -->
     <TextView
         android:id="@+id/tvRawImu"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="8dp"
+        android:layout_marginBottom="6dp"
         android:background="@color/bg_surface"
         android:padding="8dp"
-        android:text="IMU 50Hz: ax=0.12 ay_derolled=-0.04 az=9.81 | gx=0.01 gz=0.07"
+        android:text="3D ACCEL: ax=0.00 ay=0.00 az=9.81 m/s² | |g|=9.81 (1.00G)"
         android:textColor="@color/text_secondary"
-        android:textSize="10sp"
+        android:textSize="9.5sp"
         android:fontFamily="monospace"
         app:layout_constraintBottom_toTopOf="@id/bottomControls"
         app:layout_constraintStart_toStartOf="parent"
@@ -425,7 +425,7 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:layout_marginBottom="4dp"
+        android:layout_marginBottom="2dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
@@ -433,42 +433,53 @@
         <Button
             android:id="@+id/btnKillGps"
             android:layout_width="match_parent"
-            android:layout_height="50dp"
+            android:layout_height="46dp"
             android:backgroundTint="@color/alert_red"
             android:text="KILL GPS FIX (SIMULATE BLACKOUT)"
             android:textColor="@color/text_primary"
-            android:textSize="13sp"
+            android:textSize="12sp"
             android:textStyle="bold"
             android:fontFamily="monospace" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="4dp"
             android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnDemoMode"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_weight="1.2"
+                android:layout_marginEnd="3dp"
+                android:backgroundTint="@color/bg_card"
+                android:text="CORRIDOR: LIVE"
+                android:textColor="@color/accent_blue"
+                android:textSize="10sp"
+                android:fontFamily="monospace" />
 
             <Button
                 android:id="@+id/btnToggleVoice"
                 android:layout_width="0dp"
-                android:layout_height="40dp"
-                android:layout_weight="1"
-                android:layout_marginEnd="4dp"
+                android:layout_height="38dp"
+                android:layout_weight="0.9"
+                android:layout_marginEnd="3dp"
                 android:backgroundTint="@color/bg_card"
                 android:text="AUDIO: ON"
                 android:textColor="@color/accent_blue"
-                android:textSize="11sp"
+                android:textSize="10sp"
                 android:fontFamily="monospace" />
 
             <Button
                 android:id="@+id/btnToggleLeanCorrection"
                 android:layout_width="0dp"
-                android:layout_height="40dp"
+                android:layout_height="38dp"
                 android:layout_weight="1"
-                android:layout_marginStart="4dp"
                 android:backgroundTint="@color/bg_card"
-                android:text="LEAN NHC: ACTIVE"
+                android:text="LEAN NHC: ON"
                 android:textColor="@color/status_green"
-                android:textSize="11sp"
+                android:textSize="10sp"
                 android:fontFamily="monospace" />
         </LinearLayout>
     </LinearLayout>
