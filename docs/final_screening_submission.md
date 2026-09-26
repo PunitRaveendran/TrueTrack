@@ -2,7 +2,7 @@
 
 **Track:** Open Innovation (Local AI / Snapdragon NPU Focus)  
 **Team:** 3 Members  
-**Target Hardware:** Snapdragon Mobile Platform (Hexagon NPU Runtime via QNN / TFLite)
+**Target Hardware:** Qualcomm SM8850 (Snapdragon 8 Elite Gen 5) / Snapdragon Mobile Platforms (Hexagon HTP via Qualcomm QNN SDK / libQnnHtp.so)
 
 ---
 
@@ -20,17 +20,19 @@ Over 15 million gig-economy delivery riders (Swiggy, Zomato, Porter) and two-whe
 ## 2. Core Innovation: Why Local Edge AI is Structurally Essential
 In an underpass or tunnel blackout zone, cellular connectivity drops alongside GPS. A navigation engine cannot query an external cloud API or off-device model in a blackout zone. The intelligence must execute **strictly at the device edge**.
 
-### The Edge-AI Breakthrough: Neural-Inertial Odometry
+### The Edge-AI Breakthrough: Neural-Inertial Odometry & Two-Wheeler Dynamics
 Classical strapdown inertial navigation relies on double-integrating accelerometer signals ($s = \iint a \, dt$). On a two-wheeler handlebar mount, this fails:
-* Single-cylinder 4-stroke commuter engines operating between 1500–3000 RPM generate strong primary 1st-order rotational vibrations (crankshaft reciprocating imbalance at $\text{RPM}/60$) in the 25–50 Hz band ($2.0\text{--}4.0\text{ m/s}^2$ amplitude).
+* Single-cylinder 4-stroke commuter engines operating between 1500–3000 RPM generate strong primary 1st-order rotational vibrations (crankshaft reciprocating imbalance at $\text{RPM}/60$) in the 20–50 Hz band ($2.0\text{--}4.0\text{ m/s}^2$ amplitude).
 * Road roughness and surface irregularities inject continuous transient shock impulses (modeled via ISO 8608 road profiles).
+* Two-wheelers lean into corners (empirically measured up to **22.1°** in real Chennai flyover logs). Standard car Non-Holonomic Constraints (NHC) assume $a_y \approx 0$, so cornering projects gravity ($g \sin \phi$) into the lateral axis, causing rapid false drift.
 * Double-integrating these raw signals causes positional error to explode quadratically ($t^2$) within seconds.
 
 TrueTrack replaces naive double-integration with a **Normalized Neural-Inertial 1D-CNN (Temporal Convolutional Network)** tailored for the **Snapdragon Hexagon NPU**:
 1. **Per-Channel Z-Score Normalization:** Sensor channels differ by orders of magnitude (gravity acceleration mean $\sim 9.8\text{ m/s}^2$ vs. gyro angular rate std $\sim 0.07\text{ rad/s}$). TrueTrack normalizes all 6 input streams, preventing high-amplitude acceleration gradients from drowning out subtle rotational cues. Normalization reduced velocity validation MSE from 0.1389 to 0.0257 (a **57% reduction in velocity RMSE**).
-2. **Adaptive Harmonic Rejection:** The neural network processes a rolling 1-second buffer (50 samples at 50 Hz) of **full 6-axis IMU data** (`[Batch, 6, 50]`: $a_x, a_y, a_z, \omega_x, \omega_y, \omega_z$), acting as an adaptive non-linear filter damping 1st-order rotational vibration (-8.3 dB attenuation measured via empirical 35 Hz tone-injection test).
-3. **Direct Velocity Vector Regression:** Instead of integrating acceleration twice, the model directly regresses instantaneous forward vehicle speed and yaw rate $(\hat{v}, \hat{\omega})$. This converts quadratic error divergence into a bounded, linear residual problem.
-4. **Ultra-Low Edge Footprint:** The trained model footprint is **103.7 KB** in standard ONNX format (`truetrack_model.onnx`), designed for fast INT8 quantization via Qualcomm QNN tools to run in **~1.4 ms per inference** on the Hexagon NPU, maintaining a continuous 50 Hz navigation loop with negligible battery draw.
+2. **Adaptive Harmonic Rejection:** The neural network processes a rolling 1-second buffer (50 samples at 50 Hz) of **full 6-axis IMU data** (`[Batch, 6, 50]`: $a_x, a_y, a_z, \omega_x, \omega_y, \omega_z$), acting as an adaptive non-linear filter damping 1st-order rotational vibration (-8.3 dB attenuation validated against real Chennai two-wheeler drive logs: 21.6 Hz stop-and-go idle vibration and 29.9 Hz Varadarajapuram cruising harmonics).
+3. **Motorcycle Lean-Angle De-Rolling ($R_x(-\phi)$):** A 50 Hz complementary roll estimator computes dynamic bank angle $\phi(t)$ from gyro integration and gravity vector gating. Accelerations are rotated via $R_x(-\phi)$ before NHC gating, locking lateral drift to **1.80 m** (IRC:86 lane boundary) vs. 5.93 m uncorrected car NHC drift.
+4. **Direct Velocity Vector Regression:** Instead of integrating acceleration twice, the model directly regresses instantaneous forward vehicle speed and yaw rate $(\hat{v}, \hat{\omega})$. This converts quadratic error divergence into a bounded, linear residual problem.
+5. **Ultra-Low Edge Footprint:** The trained model footprint is **103.7 KB** in standard ONNX format (`truetrack_model.onnx`), designed for fast INT8 quantization via Qualcomm QNN tools with an architectural latency budget of **~1.4 ms per inference** on the Hexagon Tensor Processor (well inside the 20 ms / 50 Hz deadline), maintaining a continuous navigation loop with negligible battery draw.
 
 ---
 
@@ -104,12 +106,12 @@ To evaluate the algorithmic architecture, we conducted a systematic 4-way ablati
 * **Exported Model Artifacts:** Full 6-axis normalized 1D-CNN velocity regression model trained and exported to standard ONNX format (`truetrack_model.onnx`, 103.7 KB) and TorchScript (`truetrack_model.torchscript`, 133.3 KB).
 * **Interactive Navigation Console:** Complete web-based flight recorder cockpit (`web_app/index.html`, `navigation_engine.js`) providing real-time evaluation of Legacy GPS failure vs. TrueTrack continuous inertial navigation, real-time telemetry, EKF covariance ellipse, audio alerts, and manual GPS kill-switch.
 
-### The 30-Hour On-Ground Build Plan on Physical iQOO Device (Snapdragon Hexagon NPU):
+### The 30-Hour On-Ground Build Plan on Physical iQOO Device (Qualcomm SM8850 / Snapdragon 8 Elite Gen 5 Hexagon HTP):
 
 1. **Hours 00:00 – 04:00 | Qualcomm QNN INT8 Compilation:**
    - Convert `truetrack_model.onnx` using Qualcomm Neural Processing SDK (`qnn-onnx-converter`).
-   - Quantize to INT8 using our 6,500-sample calibration dataset; compile into standalone binary `truetrack_htp.bin` targeting the Hexagon Tensor Processor (`libQnnHtp.so`).
-   - Validate on-device execution latency $\le 1.4\text{ ms}$ on the physical iQOO phone via `qnn-net-run`.
+   - Quantize to INT8 using our calibration dataset; compile into standalone binary `truetrack_htp.bin` targeting the Hexagon Tensor Processor (`libQnnHtp.so`), adhering to Android 15's transition from deprecated NNAPI to direct vendor QNN.
+   - Validate on-device execution meeting the $\le 1.4\text{ ms}$ architectural latency budget on the physical iQOO phone via `qnn-net-run`.
 
 2. **Hours 04:00 – 10:00 | Android Native C++ NDK Sensor Ingestion:**
    - Develop a high-priority C++ pthread via Android NDK (`ASensorManager`, `ASensorEventQueue`) polling calibrated 6-axis IMU data at 50 Hz (`SENSOR_DELAY_FASTEST`).

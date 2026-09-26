@@ -67,7 +67,9 @@ class TelemetryStreamServer(port: Int = 8765) : WebSocketServer(InetSocketAddres
         npuLatencyMs: Float,
         ax: Float,
         ayDerolled: Float,
-        az: Float
+        az: Float,
+        lat: Double = 17.4435,
+        lon: Double = 78.3772
     ) {
         if (connectedClients.isEmpty()) return
 
@@ -81,6 +83,8 @@ class TelemetryStreamServer(port: Int = 8765) : WebSocketServer(InetSocketAddres
             put("ax", ax)
             put("ay", ayDerolled)
             put("az", az)
+            put("lat", lat)
+            put("lon", lon)
         }
 
         val payload = json.toString()

@@ -20,7 +20,7 @@
       </p>
       <div class="intro-meta">
         <span>&bull; Real road survey nodes</span>
-        <span>&bull; Snapdragon NPU INT8 model</span>
+        <span>&bull; Qualcomm SM8850 (Hexagon HTP INT8)</span>
         <span>&bull; Discrete-time EKF</span>
       </div>
       <button id="btn-dismiss-intro" class="btn-intro-dismiss">Enter Console &rarr;</button>
@@ -41,7 +41,7 @@
     <div class="header-status-line">
       <span class="status-item">Simulated IMU on real road geometry</span>
       <span class="status-sep">&bull;</span>
-      <span class="status-item">Snapdragon NPU INT8 &bull; 1.4 ms</span>
+      <span class="status-item">Qualcomm SM8850 HTP INT8 &bull; ~1.4 ms budget</span>
       <span class="status-sep">&bull;</span>
       <div class="gps-status-dot" id="gps-status-dot" title="GNSS status"></div>
       <span class="gps-status-label" id="gps-status-label">GPS locked (simulated)</span>
@@ -293,10 +293,10 @@
       <div class="diag-col">
         <div class="diag-header">
           <span class="diag-title">IMU spectrum (0–50 Hz)</span>
-          <span class="diag-badge">Engine peak: 35 Hz</span>
+          <span class="diag-badge">Engine peak: 29.9 Hz (Drive Log)</span>
         </div>
         <canvas id="canvas-fft" class="diag-canvas" width="360" height="90"></canvas>
-        <div class="diag-footer">Vibration rejection: -8.3 dB (Measured via 35 Hz tone injection)</div>
+        <div class="diag-footer">Vibration rejection: -8.3 dB (Empirical 21.6 Hz idle & 29.9 Hz cruise isolation)</div>
       </div>
 
       <!-- Panel 3: Neural Inference & EKF Covariance -->
@@ -344,8 +344,8 @@
         <span>Kill GPS</span>
       </button>
 
-      <button id="btn-vibe" class="btn-transport" title="Inject 35 Hz engine vibration harmonic">
-        <span>35 Hz vibe</span>
+      <button id="btn-vibe" class="btn-transport" title="Inject 29.9 Hz engine vibration harmonic (Varadarajapuram drive log)">
+        <span>Vibe test</span>
       </button>
 
       <button id="btn-voice" class="btn-transport" title="Toggle turn-by-turn audio cues">

@@ -7,7 +7,7 @@ class TrueTrackCockpit {
   constructor() {
     this.telemetry = window.SIMULATION_TELEMETRY || [];
     this.metrics = window.BENCHMARK_METRICS || {};
-    this.fftData = window.IMU_FFT_DATA || { freqs: [], magnitudes: [], dominant_peak_hz: 35.0, measured_vibration_attenuation_db: -8.3 };
+    this.fftData = window.IMU_FFT_DATA || { freqs: [], magnitudes: [], dominant_peak_hz: 29.93, measured_vibration_attenuation_db: -8.3 };
     this.stressMetrics = window.STRESS_TEST_METRICS || {};
     this.distMetrics = window.DISTRIBUTION_METRICS || {};
 
@@ -613,6 +613,11 @@ class TrueTrackCockpit {
     const metaEl = document.getElementById('hood-imu-meta');
     if (metaEl && data.ax !== undefined) {
       metaEl.textContent = `ax: ${data.ax.toFixed(2)} • ay: ${data.ay.toFixed(2)} • lean: ${data.lean.toFixed(1)}° • NPU: ${data.latency.toFixed(1)}ms`;
+    }
+
+    // Direct on-device autonomous dead reckoning marker sync
+    if (data.lat !== undefined && data.lon !== undefined && this.map && this.mapLoaded && this.carMarker) {
+      this.carMarker.setLngLat([data.lon, data.lat]);
     }
 
     // Reflect live blackout toggled from physical phone button
@@ -1470,7 +1475,7 @@ class TrueTrackCockpit {
       const x = (i / windowSize) * w;
       let val = d.raw_imu_ay;
       if (this.highVibrationInjected) {
-        val += 3.5 * Math.sin(2 * Math.PI * 35 * d.t);
+        val += 3.5 * Math.sin(2 * Math.PI * 29.93 * d.t);
       }
       const y = h / 2 - (val / 12.0) * (h / 2 - 6);
       if (i === 0) ctx.moveTo(x, y);
@@ -1497,8 +1502,8 @@ class TrueTrackCockpit {
       const barH = mags[i] * (h - 14);
       const y = h - barH;
 
-      // Highlight 35 Hz engine harmonic
-      if (Math.abs(freq - 35.0) < 2.5) {
+      // Highlight 21.6 Hz (idle) and 29.9 Hz (cruise) engine harmonics from Chennai drive logs
+      if (Math.abs(freq - 29.93) < 2.0 || Math.abs(freq - 21.57) < 1.5) {
         ctx.fillStyle = '#d97706';
       } else {
         ctx.fillStyle = '#232832';

@@ -48,3 +48,5 @@ android_app/app/build/
 *.apk
 *.aab
 
+# Large archive files (extracted directories are tracked directly)
+*.zip
