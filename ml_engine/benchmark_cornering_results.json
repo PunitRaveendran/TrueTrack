@@ -1,0 +1,54 @@
+{
+  "scenario": "curved_underpass_ramp",
+  "blackout_duration_sec": 45.0,
+  "sampling_frequency_hz": 50,
+  "max_vehicle_lean_deg": 21.0,
+  "mean_estimated_lean_error_deg": 8.96,
+  "results": {
+    "1_naive_double_integration": {
+      "description": "Classical Double-Integration (No Neural, No Map)",
+      "max_total_error_m": 297.37,
+      "end_of_blackout_total_error_m": 272.63,
+      "end_along_track_m": 150.92,
+      "end_cross_track_m": 227.04,
+      "rmse_m": 217.09,
+      "avg_drift_rate_m_per_sec": 6.0601
+    },
+    "2_map_manifold_alone": {
+      "description": "Classical INS + Road Manifold (Ablation: Map Alone)",
+      "max_total_error_m": 156.42,
+      "end_of_blackout_total_error_m": 150.93,
+      "end_along_track_m": 150.92,
+      "end_cross_track_m": 1.8,
+      "rmse_m": 103.25,
+      "avg_drift_rate_m_per_sec": 3.3551
+    },
+    "3_neural_velocity_alone": {
+      "description": "Neural Velocity 1D-CNN Alone (No Map)",
+      "max_total_error_m": 53.56,
+      "end_of_blackout_total_error_m": 44.73,
+      "end_along_track_m": 44.52,
+      "end_cross_track_m": 4.34,
+      "rmse_m": 38.53,
+      "avg_drift_rate_m_per_sec": 0.9942
+    },
+    "4_truetrack_standard_nhc": {
+      "description": "TrueTrack Standard NHC (Automotive 4-Wheel Car Assumption: phi=0)",
+      "max_total_error_m": 5.93,
+      "end_of_blackout_total_error_m": 5.93,
+      "end_along_track_m": 2.61,
+      "end_cross_track_m": 5.32,
+      "rmse_m": 3.99,
+      "avg_drift_rate_m_per_sec": 0.1318
+    },
+    "5_truetrack_lean_corrected_nhc": {
+      "description": "TrueTrack Two-Wheeler Lean-Corrected NHC (Our Full Pipeline)",
+      "max_total_error_m": 7.22,
+      "end_of_blackout_total_error_m": 7.2,
+      "end_along_track_m": 6.97,
+      "end_cross_track_m": 1.8,
+      "rmse_m": 5.25,
+      "avg_drift_rate_m_per_sec": 0.16
+    }
+  }
+}

@@ -1,0 +1,16 @@
+<resources>
+    <color name="bg_base">#0B0D10</color>
+    <color name="bg_surface">#12151A</color>
+    <color name="bg_card">#191D24</color>
+    <color name="border_subtle">#232832</color>
+
+    <color name="accent_blue">#38BDF8</color>
+    <color name="accent_deep_blue">#2563EB</color>
+    <color name="text_primary">#F1F5F9</color>
+    <color name="text_secondary">#8B94A2</color>
+    <color name="text_muted">#475569</color>
+
+    <color name="alert_amber">#D97706</color>
+    <color name="alert_red">#EF4444</color>
+    <color name="status_green">#10B981</color>
+</resources>

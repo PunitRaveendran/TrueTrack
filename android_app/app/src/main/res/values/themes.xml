@@ -1,0 +1,9 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.TrueTrack" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent_blue</item>
+        <item name="colorPrimaryVariant">@color/accent_deep_blue</item>
+        <item name="colorOnPrimary">@color/bg_base</item>
+        <item name="android:statusBarColor">@color/bg_base</item>
+        <item name="android:windowBackground">@color/bg_base</item>
+    </style>
+</resources>

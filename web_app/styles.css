@@ -40,6 +40,20 @@
   --radius-md: 6px;
 }
 
+.phone-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--text-muted);
+  margin-right: 6px;
+  transition: background-color 0.2s ease;
+}
+.phone-dot.connected {
+  background-color: var(--success);
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+}
+
 /* Reset & Box Sizing */
 *, *::before, *::after {
   box-sizing: border-box;

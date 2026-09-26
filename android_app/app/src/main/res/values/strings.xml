@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">TrueTrack</string>
+    <string name="title_instrument">NEURAL-INERTIAL COCKPIT</string>
+    <string name="status_npu_ready">Snapdragon NPU: Active (NNAPI)</string>
+    <string name="status_gps_locked">GNSS: LOCKED (50 Hz)</string>
+    <string name="status_gps_blackout">GNSS: BLACKOUT ACTIVE</string>
+    <string name="btn_kill_gps">KILL GPS FIX</string>
+    <string name="btn_restore_gps">RESTORE GPS</string>
+    <string name="label_speed">SPEED</string>
+    <string name="label_lean">LEAN ANGLE</string>
+    <string name="label_drift">EST. DRIFT</string>
+    <string name="label_latency">NPU INFERENCE</string>
+</resources>

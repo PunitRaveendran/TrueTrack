@@ -42,6 +42,12 @@ class TrueTrackCockpit {
     this.toggleNeural = true;
     this.toggleMap = true;
     this.toggleSigmoid = true;
+    this.toggleLean = true;
+
+    // Dual-Screen Green Light Phone Bridge State
+    this.isPhoneLive = false;
+    this.phoneSocket = null;
+    this.phoneTelemetry = null;
 
     // State Tracking
     this.prevBlackoutState = false;
@@ -50,6 +56,7 @@ class TrueTrackCockpit {
     this.initMap();
     this.initControls();
     this.initAblation();
+    this.initPhoneBridge();
     this.initAudioContext();
     this.initCanvases();
 
@@ -496,6 +503,106 @@ class TrueTrackCockpit {
         this.lastRenderedIdx = -1;
         this.render();
       });
+    }
+
+    const chkLean = document.getElementById('toggle-lean');
+    if (chkLean) {
+      chkLean.addEventListener('change', () => {
+        this.toggleLean = chkLean.checked;
+        this.lastRenderedIdx = -1;
+        this.render();
+      });
+    }
+  }
+
+  /* ========================================================================
+     3b. Dual-Screen Phone Bridge (Green Light Mode via WebSocket)
+     ======================================================================== */
+  initPhoneBridge() {
+    const btnPhoneLink = document.getElementById('btn-phone-link');
+    const dot = document.getElementById('phone-bridge-dot');
+    const label = document.getElementById('phone-bridge-label');
+
+    const connectWs = (host = 'localhost:8765') => {
+      if (this.phoneSocket) {
+        try { this.phoneSocket.close(); } catch (e) {}
+        this.phoneSocket = null;
+      }
+      if (label) label.textContent = 'Connecting...';
+
+      try {
+        this.phoneSocket = new WebSocket(`ws://${host}`);
+
+        this.phoneSocket.onopen = () => {
+          this.isPhoneLive = true;
+          if (dot) dot.classList.add('connected');
+          if (label) label.textContent = 'Phone: Live (50Hz)';
+          if (btnPhoneLink) btnPhoneLink.classList.add('active');
+          this.playTone(880, 'sine', 0.2);
+        };
+
+        this.phoneSocket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            this.phoneTelemetry = data;
+            this.onLivePhoneFrame(data);
+          } catch (e) {}
+        };
+
+        this.phoneSocket.onclose = () => {
+          this.isPhoneLive = false;
+          if (dot) dot.classList.remove('connected');
+          if (label) label.textContent = 'Phone Link';
+          if (btnPhoneLink) btnPhoneLink.classList.remove('active');
+        };
+
+        this.phoneSocket.onerror = () => {
+          this.isPhoneLive = false;
+          if (dot) dot.classList.remove('connected');
+          if (label) label.textContent = 'Phone Link (retry)';
+        };
+      } catch (err) {
+        console.warn("Phone Bridge connection failed:", err);
+        if (label) label.textContent = 'Phone Link';
+      }
+    };
+
+    if (btnPhoneLink) {
+      btnPhoneLink.addEventListener('click', () => {
+        if (this.isPhoneLive && this.phoneSocket) {
+          this.phoneSocket.close();
+        } else {
+          const customHost = prompt("Enter iQOO phone address:port (or leave localhost:8765 if using 'adb reverse tcp:8765 tcp:8765'):", "localhost:8765");
+          if (customHost) connectWs(customHost.trim());
+        }
+      });
+    }
+
+    // Auto-probe local WebSocket bridge after brief startup delay
+    setTimeout(() => connectWs('localhost:8765'), 1500);
+  }
+
+  onLivePhoneFrame(data) {
+    // Dynamic updates directly from physical iQOO phone
+    const speedEl = document.getElementById('hood-speed-val');
+    if (speedEl && data.speed !== undefined) speedEl.textContent = `${data.speed.toFixed(1)} km/h`;
+
+    const yawEl = document.getElementById('hood-yaw-val');
+    if (yawEl && data.yaw !== undefined) yawEl.textContent = `${data.yaw.toFixed(1)} °/s`;
+
+    const metaEl = document.getElementById('hood-imu-meta');
+    if (metaEl && data.ax !== undefined) {
+      metaEl.textContent = `ax: ${data.ax.toFixed(2)} • ay: ${data.ay.toFixed(2)} • lean: ${data.lean.toFixed(1)}° • NPU: ${data.latency.toFixed(1)}ms`;
+    }
+
+    // Reflect live blackout toggled from physical phone button
+    if (data.blackout !== undefined && data.blackout !== this.manualGpsKill) {
+      this.manualGpsKill = data.blackout;
+      const btnKill = document.getElementById('btn-kill-gps');
+      if (btnKill) {
+        btnKill.classList.toggle('active', this.manualGpsKill);
+        btnKill.textContent = this.manualGpsKill ? 'Restore GPS' : 'Kill GPS';
+      }
     }
   }
 

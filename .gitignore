@@ -40,3 +40,11 @@ Desktop.ini
 # Logs & Temporary files
 *.log
 scratch/
+
+# Android Build & Gradle
+.gradle/
+android_app/.gradle/
+android_app/app/build/
+*.apk
+*.aab
+
