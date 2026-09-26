@@ -9,10 +9,11 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- Local Telemetry Streaming Permissions for Green Light Dual-Screen Bridge -->
+    <!-- Local Telemetry Streaming Permissions for Green Light Dual-Screen Bridge & Map Tiles -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
     <application
         android:allowBackup="true"
@@ -20,6 +21,7 @@
         android:label="TrueTrack"
         android:roundIcon="@android:drawable/ic_menu_compass"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.TrueTrack">
         <activity
             android:name=".MainActivity"

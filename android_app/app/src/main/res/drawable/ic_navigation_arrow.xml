@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Outer soft halo -->
+    <path
+        android:fillColor="#330284C7"
+        android:pathData="M24,24m-20,0a20,20 0,1 1,40 0a20,20 0,1 1,-40 0" />
+    <!-- White border -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M24,6 L38,38 L24,31 L10,38 Z" />
+    <!-- Electric blue navigation chevron -->
+    <path
+        android:fillColor="#0284C7"
+        android:pathData="M24,9 L35,35 L24,29.5 L13,35 Z" />
+    <!-- Center bright accent -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M24,12 L31,32 L24,28 L17,32 Z" />
+</vector>

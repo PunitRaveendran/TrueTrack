@@ -58,6 +58,9 @@ dependencies {
     // Lightweight WebSocket server for Office Kit / Green Light dual-screen streaming
     implementation 'org.java-websocket:Java-WebSocket:1.5.4'
 
+    // OpenStreetMap (offline/online map, zero API key, dark navigation HUD)
+    implementation 'org.osmdroid:osmdroid-android:6.1.18'
+
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
