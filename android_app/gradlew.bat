@@ -13,11 +13,8 @@
 @rem See the License for the specific language governing permissions and
 @rem limitations under the License.
 @rem
-<<<<<<< HEAD
-=======
 @rem SPDX-License-Identifier: Apache-2.0
 @rem
->>>>>>> 59fae1654d31c92336bc0b79b3e119c009bba7f8
 
 @if "%DEBUG%"=="" @echo off
 @rem ##########################################################################
@@ -81,14 +78,7 @@ set CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
 
 :end
 @rem End local scope for the variables with windows NT shell
-<<<<<<< HEAD
-if "%OS%"=="Windows_NT" endlocal
-
-:omega
-@exit /b %ERRORLEVEL%
-=======
 if %ERRORLEVEL% equ 0 goto mainEnd
->>>>>>> 59fae1654d31c92336bc0b79b3e119c009bba7f8
 
 :fail
 rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
@@ -97,11 +87,8 @@ set EXIT_CODE=%ERRORLEVEL%
 if %EXIT_CODE% equ 0 set EXIT_CODE=1
 if not ""=="%GRADLE_EXIT_CONSOLE%" exit %EXIT_CODE%
 exit /b %EXIT_CODE%
-<<<<<<< HEAD
-=======
 
 :mainEnd
 if "%OS%"=="Windows_NT" endlocal
 
 :omega
->>>>>>> 59fae1654d31c92336bc0b79b3e119c009bba7f8
