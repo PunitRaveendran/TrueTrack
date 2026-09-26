@@ -55,5 +55,16 @@ local.properties
 # Large archive files (extracted directories are tracked directly)
 *.zip
 
+# Local nested clone of this repository (never commit)
+TrueTrack/
+
+# Keep the navigation foreground service visible to Git
+!android_app/app/src/main/java/com/truetrack/
+!android_app/app/src/main/java/com/truetrack/navigation/
+!android_app/app/src/main/java/com/truetrack/navigation/NavigationForegroundService.kt
+
+.chrome_tmp/
+.preview_cockpit.png
+
 # Generated training batches (re-generatable via physics_grounded_generator.py)
 ml_engine/synthetic_batch/
