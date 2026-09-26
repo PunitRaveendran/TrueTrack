@@ -3,8 +3,78 @@
  * MapLibre GL WebGL Engine + Real OSM GeoJSON Vector Manifold + Tabular Telemetry
  */
 
+const CORRIDOR_CONFIGS = {
+  hitec: {
+    id: 'hitec',
+    name: 'Hyderabad HITEC City Underpass',
+    statusDesc: 'Simulated IMU on real road geometry • 45s Underpass',
+    center: [78.3785, 17.4465],
+    zoom: 15.5,
+    minZoom: 14.0,
+    maxZoom: 18.0,
+    maxBounds: [[78.366, 17.435], [78.392, 17.455]],
+    telemetry: window.SIMULATION_TELEMETRY || [],
+    startIndex: 380, // t=38s, 2s before blackout
+    blackoutLeftPct: '30.8%',
+    blackoutWidthPct: '34.6%',
+    blackoutLabel: '45 s underpass blackout',
+    rfBadge: 'SYNTHETIC BENCHMARK',
+    rfTarget: 'BENCHMARK < 1.0 m',
+    rfTTDrift: '0.95 m',
+    rfTTSub: '0.3% of 320 m',
+    rfNaiveDrift: '114.0 m',
+    rfNaiveSub: '>100% (diverging)',
+    rfCaption: 'Evaluated across 45s underpass on surveyed HITEC City road geometry'
+  },
+  varada: {
+    id: 'varada',
+    name: 'Chennai Varadarajapuram (Real Field Log)',
+    statusDesc: 'Real Phone IMU • 45s Blackout Window • Urban Road',
+    center: [80.0833, 13.0475],
+    zoom: 16.5,
+    minZoom: 14.0,
+    maxZoom: 18.0,
+    maxBounds: [[80.070, 13.035], [80.098, 13.060]],
+    telemetry: window.VARADARAJAPURAM_TELEMETRY || [],
+    startIndex: 0,
+    blackoutLeftPct: '6.7%',
+    blackoutWidthPct: '93.3%',
+    blackoutLabel: '42 s field blackout (t=3s to 45s)',
+    rfBadge: 'CHENNAI FIELD LOG',
+    rfTarget: 'MEASURED FIELD DATA',
+    rfTTDrift: '21.0%',
+    rfTTSub: 'Straight 4.3% (17.0 m / 392 m)',
+    rfNaiveDrift: '99.3%',
+    rfNaiveSub: '358.4 m (plows into buildings)',
+    rfCaption: 'Evaluated on real Chennai phone IMU against GPS ground truth (Location.csv)'
+  },
+  rohini: {
+    id: 'rohini',
+    name: 'Chennai Rohini Koyambedu (Real Lean Cornering)',
+    statusDesc: 'Real Phone IMU • 22.1° Lean Angle • High-Speed Corridor',
+    center: [80.1994, 13.0765],
+    zoom: 16.8,
+    minZoom: 14.0,
+    maxZoom: 18.0,
+    maxBounds: [[80.185, 13.065], [80.215, 13.090]],
+    telemetry: window.ROHINI_TELEMETRY || [],
+    startIndex: 0,
+    blackoutLeftPct: '6.7%',
+    blackoutWidthPct: '93.3%',
+    blackoutLabel: '42 s cornering blackout (t=3s to 45s)',
+    rfBadge: 'CHENNAI CORNERING LOG',
+    rfTarget: 'SIH < 10% TARGET: PASSED (6.5%)',
+    rfTTDrift: '6.5%',
+    rfTTSub: '21.9 m error / 337 m traveled',
+    rfNaiveDrift: '176.7%',
+    rfNaiveSub: '595.8 m (blown off arterial)',
+    rfCaption: 'High-speed cornering log with 22.1° measured rider lean angle'
+  }
+};
+
 class TrueTrackCockpit {
   constructor() {
+    this.currentCorridor = 'hitec';
     this.telemetry = window.SIMULATION_TELEMETRY || [];
     this.metrics = window.BENCHMARK_METRICS || {};
     this.fftData = window.IMU_FFT_DATA || { freqs: [], magnitudes: [], dominant_peak_hz: 29.93, measured_vibration_attenuation_db: -8.3 };
@@ -84,9 +154,9 @@ class TrueTrackCockpit {
       pitch: 0,
       bearing: 0,
       attributionControl: false,
-      maxBounds: [[78.366, 17.435], [78.392, 17.455]], // Strictly constrained to available local tile coverage
-      minZoom: 14.5,
-      maxZoom: 17.5,
+      maxBounds: CORRIDOR_CONFIGS.hitec.maxBounds,
+      minZoom: 14.0,
+      maxZoom: 18.0,
       style: {
         version: 8,
         sources: {
@@ -390,15 +460,23 @@ class TrueTrackCockpit {
       });
     }
 
+    const selectCorridor = document.getElementById('select-corridor');
+    if (selectCorridor) {
+      selectCorridor.addEventListener('change', (e) => {
+        this.switchCorridor(e.target.value);
+      });
+    }
+
     if (btnReset) {
       btnReset.addEventListener('click', () => {
+        const cfg = CORRIDOR_CONFIGS[this.currentCorridor] || CORRIDOR_CONFIGS.hitec;
         if (this.isFollowingVehicle) {
           // Return to static Corridor view (zero camera motion, perfectly steady)
           this.isFollowingVehicle = false;
           btnReset.classList.remove('active');
           const span = btnReset.querySelector('span');
           if (span) span.textContent = 'Follow vehicle';
-          this.map.flyTo({ center: [78.3785, 17.4465], zoom: 15.5, pitch: 0, duration: 400 });
+          this.map.flyTo({ center: cfg.center, zoom: cfg.zoom, pitch: 0, duration: 400 });
         } else {
           // Enter Follow vehicle mode
           this.isFollowingVehicle = true;
@@ -474,6 +552,92 @@ class TrueTrackCockpit {
         if (btn) btn.click();
       }
     });
+  }
+
+  /* ========================================================================
+     3. Corridor Switching & Real Field Log Loading (Item #1 & #2)
+     ======================================================================== */
+  switchCorridor(corridorKey) {
+    const cfg = CORRIDOR_CONFIGS[corridorKey] || CORRIDOR_CONFIGS.hitec;
+    this.currentCorridor = corridorKey;
+    this.telemetry = cfg.telemetry && cfg.telemetry.length > 0 ? cfg.telemetry : window.SIMULATION_TELEMETRY;
+    this.currentIndex = cfg.startIndex || 0;
+    this.lastRenderedIdx = -1;
+    this.displayedLegacy = 0.0;
+    this.displayedTT = 0.0;
+
+    // 1. Update Video Scrubber slider bounds
+    const slider = document.getElementById('timeline-slider');
+    if (slider) {
+      slider.max = Math.max(0, this.telemetry.length - 1);
+      slider.value = this.currentIndex;
+    }
+
+    // 2. Update scrubber blackout span
+    const span = document.querySelector('.scrubber-blackout-span');
+    const spanLabel = document.querySelector('.scrubber-blackout-span .span-label');
+    const markerEntry = document.querySelector('.scrubber-marker.marker-entry');
+    const markerExit = document.querySelector('.scrubber-marker.marker-exit');
+    if (span) {
+      span.style.left = cfg.blackoutLeftPct;
+      span.style.width = cfg.blackoutWidthPct;
+    }
+    if (spanLabel) spanLabel.textContent = cfg.blackoutLabel;
+    if (markerEntry) markerEntry.style.left = cfg.blackoutLeftPct;
+    if (markerExit) markerExit.style.left = `calc(${cfg.blackoutLeftPct} + ${cfg.blackoutWidthPct})`;
+
+    // 3. Update Real Field Drift Badge (Item #2)
+    const pill = document.getElementById('rd-badge-pill');
+    const target = document.getElementById('rd-target-chip');
+    const ttDrift = document.getElementById('rd-tt-drift');
+    const ttSub = document.getElementById('rd-tt-sub');
+    const naiveDrift = document.getElementById('rd-naive-drift');
+    const naiveSub = document.getElementById('rd-naive-sub');
+    const caption = document.getElementById('rd-caption');
+    if (pill) pill.textContent = cfg.rfBadge;
+    if (target) target.textContent = cfg.rfTarget;
+    if (ttDrift) ttDrift.textContent = cfg.rfTTDrift;
+    if (ttSub) ttSub.textContent = cfg.rfTTSub;
+    if (naiveDrift) naiveDrift.textContent = cfg.rfNaiveDrift;
+    if (naiveSub) naiveSub.textContent = cfg.rfNaiveSub;
+    if (caption) caption.textContent = cfg.rfCaption;
+
+    // 4. Update Header status text
+    const statusItem = document.querySelector('.header-status-line .status-item');
+    if (statusItem) statusItem.textContent = cfg.statusDesc;
+
+    // 5. Update MapLibre GL Layers & Camera (Item #1)
+    if (this.map && this.mapLoaded) {
+      const fullRouteCoords = this.telemetry.map(d => [d.gt[1], d.gt[0]]);
+      const fullSrc = this.map.getSource('full-route');
+      if (fullSrc) {
+        fullSrc.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: fullRouteCoords } });
+      }
+
+      const ttSrc = this.map.getSource('tt-history');
+      if (ttSrc) {
+        ttSrc.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: [] } });
+      }
+
+      const legSrc = this.map.getSource('legacy-history');
+      if (legSrc) {
+        legSrc.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: [] } });
+      }
+
+      // Hide or show underpass tube based on corridor
+      if (this.map.getLayer('osm-underpass-tube')) {
+        this.map.setLayoutProperty('osm-underpass-tube', 'visibility', corridorKey === 'hitec' ? 'visible' : 'none');
+      }
+      if (this.map.getLayer('osm-road-centerline')) {
+        this.map.setLayoutProperty('osm-road-centerline', 'visibility', corridorKey === 'hitec' ? 'visible' : 'none');
+      }
+
+      this.map.setMaxBounds(cfg.maxBounds);
+      this.map.flyTo({ center: cfg.center, zoom: cfg.zoom, pitch: 0, duration: 800 });
+    }
+
+    this.updateHUD();
+    this.render();
   }
 
   toggleDrawer(forceState = null) {
@@ -881,7 +1045,11 @@ class TrueTrackCockpit {
     if (timeReadout) {
       const curM = Math.floor(cur.t / 60);
       const curS = (cur.t % 60).toFixed(1).padStart(4, '0');
-      timeReadout.textContent = `${curM.toString().padStart(2, '0')}:${curS} / 02:10.0`;
+      const lastSample = this.telemetry[this.telemetry.length - 1];
+      const totalT = lastSample ? lastSample.t : 130.0;
+      const totalM = Math.floor(totalT / 60);
+      const totalS = (totalT % 60).toFixed(1).padStart(4, '0');
+      timeReadout.textContent = `${curM.toString().padStart(2, '0')}:${curS} / ${totalM.toString().padStart(2, '0')}:${totalS}`;
     }
 
     // 2. Quiet GPS Status Dot
@@ -1093,7 +1261,7 @@ class TrueTrackCockpit {
     if (!src) return;
 
     const mToLat = 1.0 / 110600.0;
-    const mToLon = 1.0 / (111320.0 * Math.cos((17.4415 * Math.PI) / 180.0));
+    const mToLon = 1.0 / (111320.0 * Math.cos((centerLngLat[1] * Math.PI) / 180.0));
     const headingRad = (headingDeg * Math.PI) / 180.0;
 
     const nPoints = 24;

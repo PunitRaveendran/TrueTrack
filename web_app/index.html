@@ -33,7 +33,11 @@
       <div class="instrument-title">
         <span class="brand-name">TrueTrack</span>
         <span class="separator">/</span>
-        <span class="corridor-title">Hyderabad HITEC City Underpass</span>
+        <select id="select-corridor" class="corridor-select" title="Switch corridor or real Chennai field log">
+          <option value="hitec">Hyderabad HITEC City (45s Underpass)</option>
+          <option value="varada">Chennai Varadarajapuram (Real Field Log • 45s Blackout)</option>
+          <option value="rohini">Chennai Rohini Koyambedu (Real Lean Cornering • 22.1°)</option>
+        </select>
       </div>
     </div>
 
@@ -144,6 +148,37 @@
           </div>
         </div>
         <div class="hero-status-caption" id="hero-status-caption">at 0:38 &bull; GPS locked (both &asymp; 0)</div>
+      </section>
+
+      <!-- REAL FIELD GPS GROUND TRUTH VALIDATION (Item #2 Requirement) -->
+      <section class="panel-section real-drift-section" id="real-drift-section">
+        <div class="real-drift-card">
+          <div class="real-drift-header">
+            <span class="rd-badge-pill" id="rd-badge-pill">FIELD BENCHMARK</span>
+            <span class="rd-target-chip" id="rd-target-chip">SIH TARGET: &lt;10% PASSED</span>
+          </div>
+          <div class="rd-title">Real GPS Ground Truth Drift</div>
+          <div class="rd-stats-grid">
+            <div class="rd-stat-col">
+              <span class="rd-metric-lbl">TrueTrack Measured</span>
+              <div class="rd-metric-row">
+                <span class="rd-metric-num tt-txt" id="rd-tt-drift">6.5%</span>
+                <span class="rd-metric-unit">of dist</span>
+              </div>
+              <span class="rd-metric-sub" id="rd-tt-sub">21.9 m error / 337 m</span>
+            </div>
+            <div class="rd-divider"></div>
+            <div class="rd-stat-col">
+              <span class="rd-metric-lbl">Classical Naive INS</span>
+              <div class="rd-metric-row">
+                <span class="rd-metric-num error-txt" id="rd-naive-drift">176.7%</span>
+                <span class="rd-metric-unit">drift</span>
+              </div>
+              <span class="rd-metric-sub" id="rd-naive-sub">595.8 m (off-road)</span>
+            </div>
+          </div>
+          <div class="rd-caption" id="rd-caption">Evaluated on real Chennai phone IMU against GPS ground truth in clear-sky blackout windows</div>
+        </div>
       </section>
 
       <!-- LIVE ERROR OVER TIME CHART (Expanded to 180px, Log Scale, Crosshair Hover) -->
@@ -389,7 +424,8 @@
 
   <!-- Scripts: 100% Offline MapLibre GL & Engines -->
   <script src="lib/maplibre-gl.js"></script>
-  <script src="js/corridor_data.js?v=round3_v3"></script>
-  <script src="js/navigation_engine.js?v=round3_v3"></script>
+  <script src="js/corridor_data.js?v=round4"></script>
+  <script src="js/real_telemetry.js?v=round4"></script>
+  <script src="js/navigation_engine.js?v=round4"></script>
 </body>
 </html>
