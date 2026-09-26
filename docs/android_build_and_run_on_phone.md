@@ -3,8 +3,13 @@
 Verified working instructions for deploying the on-device TrueTrack cockpit
 (`com.truetrack.navigation`) to a physical Android phone from this Windows machine.
 
-> Build status: `BUILD SUCCESSFUL in 3m 7s` (37 tasks) with Gradle 8.12 + AGP 8.2.2 +
-> Kotlin 1.9.22 on JDK 17, producing `android_app/app/build/outputs/apk/debug/app-debug.apk`.
+> Branch: `feature/android-app-setup-v2` = `feature/android-app-setup` (bc6d618: osmdroid dark map,
+> preloaded offline tiles, HITEC City corridor, 1300-frame flight-recorder simulation, ZUPT lock,
+> 45-degree roll clamp) merged with `main` (d9f9270: HandlerThread IMU polling + serialized
+> background ONNX inference).
+> Verified: `BUILD SUCCESSFUL` (Gradle 8.12 / AGP 8.2.2 / Kotlin 1.9.22 / JDK 17) producing
+> `android_app/app/build/outputs/apk/debug/app-debug.apk` (~56 MB incl. the ONNX model, the
+> 1300-frame simulation dump and 28 offline map tiles).
 
 ---
 
@@ -95,41 +100,55 @@ to 17 (step 1), pick the phone in the device dropdown and press **Run ▶**.
 
 ## 4. First-run verification checklist
 
-The app needs **no runtime permission dialogs** (only normal permissions are used:
-`HIGH_SAMPLING_RATE_SENSORS`, `WAKE_LOCK`, `VIBRATE`, plus the declared location/Wi-Fi permissions).
+On first launch the app asks for **location permission** (`ACCESS_FINE_LOCATION` /
+`ACCESS_COARSE_LOCATION`) — tap **Allow** (it is also what lets Android 13+ expose the Wi-Fi IP used
+by the telemetry bridge). Everything else it needs (`HIGH_SAMPLING_RATE_SENSORS`, `WAKE_LOCK`,
+`VIBRATE`) is granted automatically.
 
 1. Launch **TrueTrack** — the cockpit should render immediately with:
    * header `TRUETRACK` + badge `HEXAGON NPU 1.4ms`,
    * GNSS status banner, speed hero card, lean-angle card,
    * a 2x2 grid: `YAW RATE (wz)`, `LATERAL CONSTRAINT`, `DRIFT RATE`, `DUAL-SCREEN BRIDGE`,
-   * the raw diagnostics line and the red `KILL GPS FIX (SIMULATE BLACKOUT)` button.
-2. Confirm the model + NPU delegate loaded:
+   * a dark OpenStreetMap card showing the HITEC City corridor, the road centreline, the tunnel
+     segment, the vehicle marker and the TrueTrack-vs-naive track polylines (with a recenter button),
+   * bottom controls `KILL GPS FIX` / `MODE: SIMULATION` / `AUDIO: ON` / `LEAN NHC: ON`.
+2. Confirm the assets and model loaded:
 
    ```powershell
    adb logcat -s MainActivity:V
+   # "Preloaded offline corridor map tiles into local cache"
+   # "Loaded 1300 simulation telemetry frames"
    # "Successfully loaded normalization stats"
-   # "ONNX model loaded successfully (<nnn> KB)"
-   # "Qualcomm Hexagon NPU acceleration provider initialized"  (or "... fallback to CPU")
+   # "TrueTrack ONNX model successfully initialized"
+   # "Configured Qualcomm Hexagon NNAPI hardware acceleration"   (or the CPU fallback warning)
    ```
-3. Move/rotate the phone -> speed, lean angle and yaw-rate readouts must react (50 Hz IMU).
-4. Tap **KILL GPS FIX (SIMULATE BLACKOUT)** -> banner turns red, blackout timer counts up,
-   `DRIFT RATE` switches to `0.008 m/s (DR)` and the diagnostics line shows live dead-reckoned
-   `LAT/LON`. Tap again to restore the fix.
-5. Toggle **AUDIO: ON/OFF** and **LEAN NHC: ACTIVE/OFF** to confirm the buttons respond.
-6. The app does **not** hold the screen awake: enable *Developer options → Stay awake* (or keep
+3. **Simulation mode is the default:** the map replays the 1300-frame corridor run, starting 3 s
+   before the underpass blackout. Confirm the marker moves, the polylines accumulate and the
+   blackout banner + timer engage on their own at the tunnel segment.
+4. Tap **MODE: SIMULATION** -> it becomes `MODE: LIVE SENSOR`: the readouts now come from the phone's
+   real 50 Hz IMU + on-device ONNX inference. Move/rotate the phone and check that speed, lean angle
+   and yaw rate react; hold it still and the ZUPT standstill lock should drop speed to `0.0`.
+5. Tap **KILL GPS FIX (SIMULATE BLACKOUT)** -> banner turns red, the timer counts up, `DRIFT RATE`
+   switches to the dead-reckoning value and the drift polyline starts diverging. Tap again to restore.
+6. Use the map **recenter button** to re-enable auto-follow, and toggle **AUDIO: ON/OFF** and
+   **LEAN NHC: ON/OFF** to confirm those controls respond.
+7. The app does **not** hold the screen awake: enable *Developer options → Stay awake* (or keep
    tapping the screen), otherwise it will sleep during a drive.
 
 ---
 
 ## 5. Optional: laptop cockpit (dual-screen bridge)
 
-* On launch the app starts a WebSocket telemetry server on port **8765** and prints the URL in the
-  `DUAL-SCREEN BRIDGE` card (`ws://<phone-ip>:8765`).
-* Put the phone and the laptop on the same Wi-Fi / hotspot, open `web_app/index.html` on the laptop
-  and point it at that `ws://` URL.
-* If the card shows `ws://0.0.0.0:8765` or `ws://*:8765 (off)`: join a Wi-Fi network and allow
-  **Location** for the app (Android 13+ restricts Wi-Fi info to apps with location permission),
-  then relaunch the app.
+* On launch the app starts a WebSocket telemetry server on port **8765**; the `DUAL-SCREEN BRIDGE`
+  card shows `:8765` (or `:8765 (off)` if the server could not bind the port).
+* Find the phone's Wi-Fi address and point the laptop cockpit at it:
+
+  ```powershell
+  adb shell ip -4 addr show wlan0
+  # then on the laptop open web_app/index.html and connect to: ws://<phone-ip>:8765
+  ```
+* Put the phone and the laptop on the same Wi-Fi / hotspot and keep the app in the foreground while
+  the cockpit is connected (the app only broadcasts while it is running).
 
 ---
 
