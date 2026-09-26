@@ -33,13 +33,28 @@
       <div class="instrument-title">
         <span class="brand-name">TrueTrack</span>
         <span class="separator">/</span>
-        <span class="corridor-title">Hyderabad HITEC City Underpass</span>
+        <select id="select-corridor" class="corridor-select" title="Switch corridor or real Chennai field log">
+          <option value="hitec">Hyderabad HITEC City (45s Underpass • OSM Manifold)</option>
+          <option value="varada">Chennai Varadarajapuram (45s Urban Drive • Pure DR)</option>
+          <option value="rohini">Chennai Rohini Koyambedu (30s Curve • 22.1° Lean)</option>
+          <option value="45_46">Chennai 45/46 Corridor (45s High-Vibration • Pure DR)</option>
+        </select>
+        <span class="separator">&bull;</span>
+        <select id="select-poi" class="poi-select" title="Select POI Destination for on-device A* routing">
+          <option value="">A* Destination POI...</option>
+          <option value="cyber_towers">Cyber Towers Junction (1.0 km)</option>
+          <option value="trident_hotel">Trident Hotel Hyderabad (1.0 km)</option>
+          <option value="cyber_gateway">Cyber Gateway (574 m)</option>
+          <option value="deloitte_driveway">Deloitte Mindspace (1.2 km)</option>
+          <option value="tcs_deccan_park">TCS Deccan Park (718 m)</option>
+          <option value="paradise_biryani">Paradise Food Court (994 m)</option>
+        </select>
       </div>
     </div>
 
     <!-- Single quiet status line -->
     <div class="header-status-line">
-      <span class="status-item">Simulated IMU on real road geometry</span>
+      <span class="status-item" id="header-status-desc">Simulated IMU on real road geometry</span>
       <span class="status-sep">&bull;</span>
       <span class="status-item">Qualcomm SM8850 HTP INT8 &bull; ~1.4 ms budget</span>
       <span class="status-sep">&bull;</span>
@@ -48,6 +63,10 @@
     </div>
 
     <div class="header-actions">
+      <button id="btn-toggle-three-trace" class="btn-quiet btn-trace-toggle" title="Toggle Synchronized Three-Trace Telemetry Deck">
+        <span class="trace-pulse-dot"></span>
+        <span>3-Trace View</span>
+      </button>
       <button id="btn-phone-link" class="btn-quiet" title="Connect to on-device Android phone telemetry stream (ws://localhost:8765)">
         <span class="phone-dot" id="phone-bridge-dot"></span>
         <span id="phone-bridge-label">Phone Link</span>
@@ -194,6 +213,37 @@
         <div class="hero-status-caption" id="hero-status-caption">at 0:38 &bull; GPS locked (both &asymp; 0)</div>
       </section>
 
+      <!-- REAL FIELD GPS GROUND TRUTH VALIDATION (Item #2 Requirement) -->
+      <section class="panel-section real-drift-section" id="real-drift-section">
+        <div class="real-drift-card">
+          <div class="real-drift-header">
+            <span class="rd-badge-pill" id="rd-badge-pill">FIELD BENCHMARK</span>
+            <span class="rd-target-chip" id="rd-target-chip">DRIFT TARGET: &lt;10% (industry dead-reckoning benchmark) &mdash; PASSED</span>
+          </div>
+          <div class="rd-title">Real GPS Ground Truth Drift</div>
+          <div class="rd-stats-grid">
+            <div class="rd-stat-col">
+              <span class="rd-metric-lbl">TrueTrack Measured</span>
+              <div class="rd-metric-row">
+                <span class="rd-metric-num tt-txt" id="rd-tt-drift">6.2%</span>
+                <span class="rd-metric-unit">of dist</span>
+              </div>
+              <span class="rd-metric-sub" id="rd-tt-sub">21.0 m error / 337 m (pure unassisted)</span>
+            </div>
+            <div class="rd-divider"></div>
+            <div class="rd-stat-col">
+              <span class="rd-metric-lbl">Classical Naive INS</span>
+              <div class="rd-metric-row">
+                <span class="rd-metric-num error-txt" id="rd-naive-drift">176.7%</span>
+                <span class="rd-metric-unit">drift</span>
+              </div>
+              <span class="rd-metric-sub" id="rd-naive-sub">595.8 m (off-road)</span>
+            </div>
+          </div>
+          <div class="rd-caption" id="rd-caption">Evaluated on real Chennai phone IMU against GPS ground truth in clear-sky blackout windows</div>
+        </div>
+      </section>
+
       <!-- LIVE ERROR OVER TIME CHART (Expanded to 180px, Log Scale, Crosshair Hover) -->
       <section class="panel-section chart-section">
         <div class="section-label">Drift over time (meters, log scale 0.1 &rarr; 200 m)</div>
@@ -234,6 +284,56 @@
               <span class="switch-slider"></span>
             </label>
             <span class="ablation-text">Two-wheeler lean-corrected NHC</span>
+          </div>
+      <!-- INTERACTIVE COCKPIT CONTROLS & LEAN LIGHTBAR (Task 1.7) -->
+      <section class="panel-section controls-section">
+        <div class="section-label">Interactive Cockpit & Vehicle Controls</div>
+
+        <!-- Two-Wheeler Lean NHC Lightbar / Status Badge -->
+        <div class="lean-lightbar-container">
+          <div class="lean-header">
+            <span class="lean-title">Two-Wheeler Lean Angle (&phi;)</span>
+            <span class="lean-angle-badge" id="val-lean-angle">0.0&deg;</span>
+          </div>
+          <div class="lean-bar-track">
+            <div class="lean-bar-center-line"></div>
+            <div class="lean-bar-fill-left" id="lean-fill-left" style="width: 0%;"></div>
+            <div class="lean-bar-fill-right" id="lean-fill-right" style="width: 0%;"></div>
+            <div class="lean-pointer" id="lean-pointer" style="left: 50%;"></div>
+          </div>
+          <div class="lean-labels">
+            <span>&larr; Left 30&deg;</span>
+            <span id="badge-lean-status" class="lean-mode-badge active">LEAN NHC ACTIVE</span>
+            <span>Right 30&deg; &rarr;</span>
+          </div>
+        </div>
+
+        <!-- Rolling Sampling Window Slider (10 to 100 samples) -->
+        <div class="slider-control-row">
+          <div class="slider-label-row">
+            <span class="slider-title">IMU / NPU Rolling Window</span>
+            <span class="slider-val-badge" id="val-sample-window">50 samples (5.0s)</span>
+          </div>
+          <input type="range" id="slider-sample-window" class="control-slider" min="10" max="100" value="50" step="5">
+          <div class="slider-scale-ticks">
+            <span>10 (1.0s)</span>
+            <span>50 (5.0s)</span>
+            <span>100 (10.0s)</span>
+          </div>
+        </div>
+
+        <!-- Continuous Playback Speed Slider (0.5x to 5.0x) -->
+        <div class="slider-control-row">
+          <div class="slider-label-row">
+            <span class="slider-title">Continuous Playback Speed</span>
+            <span class="slider-val-badge" id="val-continuous-speed">1.0&times;</span>
+          </div>
+          <input type="range" id="slider-continuous-speed" class="control-slider" min="0.5" max="5.0" value="1.0" step="0.1">
+          <div class="slider-scale-ticks">
+            <span>0.5&times;</span>
+            <span>1.0&times;</span>
+            <span>2.5&times;</span>
+            <span>5.0&times;</span>
           </div>
         </div>
       </section>
@@ -311,11 +411,11 @@
         </details>
       </section>
 
-      <!-- DRAWER EXPAND BUTTON -->
+      <!-- THREE-TRACE TELEMETRY DECK TRIGGER -->
       <div class="drawer-trigger-wrap">
         <button id="btn-hood-toggle" class="btn-drawer-trigger">
           <span id="hood-toggle-arrow">&blacktriangledown;</span>
-          <span>Under the hood diagnostics (IMU &bull; FFT &bull; EKF)</span>
+          <span>Synchronized Telemetry Deck (IMU 50Hz &bull; NPU Regressor &bull; EKF Manifold)</span>
         </button>
       </div>
 
@@ -323,44 +423,64 @@
 
   </main>
 
-  <!-- COLLAPSIBLE UNDER-THE-HOOD DRAWER (Closed by default) -->
+  <!-- COLLAPSIBLE THREE-TRACE TELEMETRY DECK (Task 1.6) -->
   <section class="diagnostics-drawer" id="diagnostics-drawer">
     <div class="drawer-content">
       
-      <!-- Panel 1: Raw 6-Axis IMU Stream -->
-      <div class="diag-col">
+      <!-- Trace 1: Raw 6-Axis IMU Stream (50 Hz, 3 Channels) -->
+      <div class="diag-col trace-col">
         <div class="diag-header">
-          <span class="diag-title">Raw 6-axis IMU stream</span>
-          <span class="diag-badge">50 Hz</span>
+          <span class="diag-title">Trace 1: 50 Hz Raw IMU Waveform</span>
+          <div class="trace-channels">
+            <span class="ch-badge ch-ax">ax</span>
+            <span class="ch-badge ch-ay">ay</span>
+            <span class="ch-badge ch-gz">gz</span>
+          </div>
         </div>
-        <canvas id="canvas-imu-wave" class="diag-canvas" width="360" height="90"></canvas>
-        <div class="diag-footer" id="hood-imu-meta">ax: 0.00 &bull; ay: 0.00 &bull; gz: 0.000 rad/s</div>
+        <canvas id="canvas-imu-wave" class="diag-canvas" width="380" height="85"></canvas>
+        <div class="diag-footer" id="hood-imu-meta">
+          <span id="trace-val-ax" style="color: #38bdf8;">ax: 0.00 m/s&sup2;</span> &bull; 
+          <span id="trace-val-ay" style="color: #f59e0b;">ay: 0.00 m/s&sup2;</span> &bull; 
+          <span id="trace-val-gz" style="color: #c084fc;">gz: 0.000 rad/s</span>
+        </div>
       </div>
 
-      <!-- Panel 2: Live FFT Frequency Spectrum -->
-      <div class="diag-col">
+      <!-- Trace 2: Real-time NPU Predicted Speed & Yaw-rate Regressor -->
+      <div class="diag-col trace-col">
         <div class="diag-header">
+         feature/android-app-setup-v2
           <span class="diag-title">IMU spectrum (0–50 Hz)</span>
           <span class="diag-badge">Engine peak: 29.9 Hz (Drive Log)</span>
         </div>
         <canvas id="canvas-fft" class="diag-canvas" width="360" height="90"></canvas>
         <div class="diag-footer">Vibration rejection: -8.3 dB (Empirical 21.6 Hz idle & 29.9 Hz cruise isolation)</div>
+
+          <span class="diag-title">Trace 2: Real-Time NPU Velocity Regressor</span>
+          <span class="diag-badge">Hexagon HTP INT8 &bull; ~1.4 ms</span>
+        </div>
+        <canvas id="canvas-npu-trace" class="diag-canvas" width="380" height="85"></canvas>
+        <div class="diag-footer" id="hood-npu-meta">
+          <span id="trace-val-vpred" style="color: #10b981;">v_pred: 0.0 km/h</span> &bull; 
+          <span id="trace-val-vgt" style="color: #94a3b8;">v_gt: 0.0 km/h</span> &bull; 
+          <span id="trace-val-yaw" style="color: #818cf8;">yaw: 0.0&deg;/s</span>
+        </div>
+         main
       </div>
 
-      <!-- Panel 3: Neural Inference & EKF Covariance -->
-      <div class="diag-col">
+      <!-- Trace 3: State Estimation & Manifold Snapping -->
+      <div class="diag-col trace-col">
         <div class="diag-header">
-          <span class="diag-title">State estimation</span>
-          <span class="diag-badge">Discrete-time EKF</span>
+          <span class="diag-title">Trace 3: EKF Manifold & Lean State</span>
+          <span class="diag-badge" id="hood-manifold-badge">Manifold Snapped</span>
         </div>
         <div class="state-metrics-grid">
           <div class="state-metric">
-            <span class="s-lbl">Predicted speed</span>
-            <span class="s-val" id="hood-speed-val">0.0 km/h</span>
+            <span class="s-lbl">Rider Lean Angle (&phi;)</span>
+            <span class="s-val" id="hood-lean-val">0.0&deg;</span>
           </div>
           <div class="state-metric">
-            <span class="s-lbl">Predicted yaw rate</span>
-            <span class="s-val" id="hood-yaw-val">0.0 &deg;/s</span>
+            <span class="s-lbl">Manifold Snapping</span>
+            <span class="s-val tt-txt" id="hood-snap-state">LOCKED</span>
           </div>
           <div class="state-metric">
             <span class="s-lbl">Along-track uncertainty (&sigma;<sub>&parallel;</sub>)</span>
@@ -368,10 +488,10 @@
           </div>
           <div class="state-metric">
             <span class="s-lbl">Cross-track uncertainty (&sigma;<sub>&perp;</sub>)</span>
-            <span class="s-val tt-txt" id="hood-sigma-cross">0.21 m</span>
+            <span class="s-val tt-txt" id="hood-sigma-cross">0.18 m</span>
           </div>
         </div>
-        <div class="diag-footer">Road manifold bounds lateral &sigma;<sub>&perp;</sub> &le; 0.18 m inside tunnel</div>
+        <div class="diag-footer" id="hood-status-footer">Road manifold bounds lateral &sigma;<sub>&perp;</sub> &le; 0.18 m inside tunnel</div>
       </div>
 
     </div>
@@ -437,7 +557,14 @@
 
   <!-- Scripts: 100% Offline MapLibre GL & Engines -->
   <script src="lib/maplibre-gl.js"></script>
+         feature/android-app-setup-v2
   <script src="js/corridor_data.js?v=round3_v3"></script>
   <script src="js/navigation_engine.js?v=round3_p1"></script>
+
+  <script src="js/corridor_data.js?v=round4"></script>
+  <script src="js/all_routes_telemetry.js?v=round4"></script>
+  <script src="js/real_telemetry.js?v=round4"></script>
+  <script src="js/navigation_engine.js?v=round4"></script>
+         main
 </body>
 </html>

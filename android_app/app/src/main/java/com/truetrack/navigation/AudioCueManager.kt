@@ -3,6 +3,7 @@ package com.truetrack.navigation
 import android.content.Context
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import java.util.Locale
@@ -11,7 +12,7 @@ import java.util.Locale
  * TrueTrack - Audio Cue & Acoustic Status Synthesizer
  *
  * Provides real-time tactical acoustic feedback and spoken navigation cues
- * when entering/exiting GNSS blackout zones and negotiating underground forks.
+ * when entering/exiting GNSS blackout zones, switching routes, and negotiating underground forks.
  */
 class AudioCueManager(private val context: Context) : TextToSpeech.OnInitListener {
 
@@ -19,11 +20,12 @@ class AudioCueManager(private val context: Context) : TextToSpeech.OnInitListene
     private var isTtsReady = false
     private var toneGenerator: ToneGenerator? = null
     var isEnabled: Boolean = true
+    private val pendingUtterances = mutableListOf<String>()
 
     init {
         try {
             tts = TextToSpeech(context.applicationContext, this)
-            toneGenerator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
+            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 85)
         } catch (e: Exception) {
             Log.e("AudioCueManager", "Failed to initialize audio components", e)
         }
@@ -31,10 +33,34 @@ class AudioCueManager(private val context: Context) : TextToSpeech.OnInitListene
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            val result = tts?.setLanguage(Locale.US)
-            isTtsReady = result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED
+            var result = tts?.setLanguage(Locale.US)
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                result = tts?.setLanguage(Locale.getDefault())
+            }
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                result = tts?.setLanguage(Locale.ENGLISH)
+            }
+            isTtsReady = (result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED)
             tts?.setSpeechRate(1.05f)
+            Log.i("AudioCueManager", "TTS initialized successfully (isTtsReady=$isTtsReady)")
+
+            synchronized(pendingUtterances) {
+                for (text in pendingUtterances) {
+                    speak(text)
+                }
+                pendingUtterances.clear()
+            }
+        } else {
+            Log.e("AudioCueManager", "TextToSpeech init failed with status: $status")
         }
+    }
+
+    /**
+     * Announces system online status.
+     */
+    fun onSystemOnline(routeName: String = "HITEC City Corridor") {
+        if (!isEnabled) return
+        speak("TrueTrack navigation active. Route: $routeName.")
     }
 
     /**
@@ -71,9 +97,24 @@ class AudioCueManager(private val context: Context) : TextToSpeech.OnInitListene
         speak(instruction)
     }
 
-    private fun speak(text: String) {
-        if (isTtsReady && isEnabled) {
-            tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "TrueTrackCue_${System.currentTimeMillis()}")
+    fun speak(text: String) {
+        if (!isEnabled) return
+        if (!isTtsReady) {
+            synchronized(pendingUtterances) {
+                pendingUtterances.add(text)
+            }
+            Log.d("AudioCueManager", "TTS not ready yet, queued: $text")
+            return
+        }
+        try {
+            val params = Bundle().apply {
+                putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
+                putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+            }
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "TrueTrackCue_${System.currentTimeMillis()}")
+            Log.i("AudioCueManager", "Speaking: $text")
+        } catch (e: Exception) {
+            Log.e("AudioCueManager", "Error speaking text", e)
         }
     }
 

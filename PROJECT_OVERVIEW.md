@@ -3,7 +3,7 @@
 > **Project Name:** TrueTrack &ndash; On-Device Neural-Inertial Navigation for GPS-Denied Urban Corridors  
 > **Target Hardware:** Snapdragon Mobile Platform (Hexagon NPU Runtime via QNN / TFLite)  
 > **Primary Use-Case:** Autonomous offline navigation for two-wheelers in underpasses, tunnels, and urban canyons  
-> **Workspace Path:** `c:\Jala deee\IQOO\TrueTrack`
+> **Workspace Path:** `c:\Users\Punit Raveendran\Desktop\Projects\IQOO`
 
 ---
 
@@ -23,8 +23,8 @@ TrueTrack/
 │           ├── AndroidManifest.xml     # Application manifest & permissions
 │           ├── assets/                 # Edge AI model assets & specs
 │           │   ├── norm_stats.json     # Per-channel Z-score normalization parameters
-│           │   ├── npu_model_spec.json # Hexagon NPU hardware deployment specs
-│           │   └── truetrack_model.onnx# 103.7 KB INT8 ONNX Neural Model
+│           │   ├── npu_model_spec.json # Deployment specs (25,804 params, 123.7 KB)
+│           │   └── truetrack_model.onnx# 123.7 KB FP32/INT8 ONNX Model (25,804 params)
 │           ├── java/com/truetrack/navigation/
 │           │   ├── MainActivity.kt     # App entry, sensor listeners & UI bindings
 │           │   ├── AudioCueManager.kt  # Text-to-Speech audio navigation guidance
@@ -46,7 +46,7 @@ TrueTrack/
 │   ├── fetch_osm.py                    # OpenStreetMap road graph fetcher
 │   ├── inspect_highways.py             # Highway tag and element inspector
 │   ├── truetrack_1dcnn.pth             # Trained PyTorch model weights
-│   ├── truetrack_model.onnx            # Exported ONNX model file (103.7 KB)
+│   ├── truetrack_model.onnx            # Exported ONNX model file (123.7 KB, 25,804 params)
 │   ├── truetrack_model.torchscript     # Exported TorchScript model file
 │   ├── norm_stats.json                 # Z-score normalization statistics
 │   ├── npu_model_spec.json             # NPU target performance metrics
@@ -93,9 +93,10 @@ TrueTrack/
   * [`LeanCorrector.kt`](file:///c:/Jala%20deee/IQOO/TrueTrack/android_app/app/src/main/java/com/truetrack/navigation/LeanCorrector.kt): Estimates motorcycle lean angle ($\theta_{\text{lean}} = \arctan(v \cdot \omega / g)$) to disentangle gravity components during turns.
   * [`TelemetryStreamServer.kt`](file:///c:/Jala%20deee/IQOO/TrueTrack/android_app/app/src/main/java/com/truetrack/navigation/TelemetryStreamServer.kt): Embedded HTTP/WebSocket server streaming live IMU readings at 50Hz to external visualization cockpits.
   * **On-Device Assets:**
-    * [`truetrack_model.onnx`](file:///c:/Jala%20deee/IQOO/TrueTrack/android_app/app/src/main/assets/truetrack_model.onnx): 103.7 KB INT8 quantized neural network.
-    * [`norm_stats.json`](file:///c:/Jala%20deee/IQOO/TrueTrack/android_app/app/src/main/assets/norm_stats.json): Per-channel normalization parameters ($\mu, \sigma$).
-    * [`npu_model_spec.json`](file:///c:/Jala%20deee/IQOO/TrueTrack/android_app/app/src/main/assets/npu_model_spec.json): Benchmarking specifications for Hexagon NPU execution (1.4 ms latency, 0.04W power draw).
+    * [`truetrack_model.onnx`](file:///c:/Users/Punit%20Raveendran/Desktop/Projects/IQOO/android_app/app/src/main/assets/truetrack_model.onnx): 123.7 KB FP32/INT8 ONNX model (25,804 parameters).
+    * [`norm_stats.json`](file:///c:/Users/Punit%20Raveendran/Desktop/Projects/IQOO/android_app/app/src/main/assets/norm_stats.json): Per-channel normalization parameters ($\mu, \sigma$).
+    * [`npu_model_spec.json`](file:///c:/Users/Punit%20Raveendran/Desktop/Projects/IQOO/android_app/app/src/main/assets/npu_model_spec.json): Hardware execution specs (1.4 ms NPU latency, universal CPU fallback).
+    * `tiles/`: 28 offline OpenStreetMap tiles (745.9 KB) covering corridor test zones.
 
 ---
 

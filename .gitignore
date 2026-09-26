@@ -63,6 +63,8 @@ TrueTrack/
 !android_app/app/src/main/java/com/truetrack/navigation/
 !android_app/app/src/main/java/com/truetrack/navigation/NavigationForegroundService.kt
 
-
 .chrome_tmp/
 .preview_cockpit.png
+
+# Generated training batches (re-generatable via physics_grounded_generator.py)
+ml_engine/synthetic_batch/
