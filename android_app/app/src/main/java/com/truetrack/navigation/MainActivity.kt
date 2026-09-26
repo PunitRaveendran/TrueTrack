@@ -130,6 +130,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         initViews()
         requestLocationPermissions()
+        preloadOfflineTiles()
         initMap()
         loadNormalizationStats()
         initOnnxModel()
@@ -148,6 +149,38 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 ),
                 1001
             )
+        }
+    }
+
+    private fun preloadOfflineTiles() {
+        try {
+            val tileCacheDir = java.io.File(Configuration.getInstance().osmdroidTileCache, "Mapnik")
+            if (!tileCacheDir.exists()) {
+                tileCacheDir.mkdirs()
+            }
+            val assetManager = assets
+            val zoomLevels = assetManager.list("tiles") ?: return
+            for (zoom in zoomLevels) {
+                val xDirs = assetManager.list("tiles/$zoom") ?: continue
+                for (x in xDirs) {
+                    val yFiles = assetManager.list("tiles/$zoom/$x") ?: continue
+                    val targetDir = java.io.File(tileCacheDir, "$zoom/$x")
+                    if (!targetDir.exists()) targetDir.mkdirs()
+                    for (y in yFiles) {
+                        val destFile = java.io.File(targetDir, y)
+                        if (!destFile.exists()) {
+                            assetManager.open("tiles/$zoom/$x/$y").use { input ->
+                                destFile.outputStream().use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Log.i("MainActivity", "Preloaded offline corridor map tiles into local cache")
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to preload offline map tiles from assets", e)
         }
     }
 
@@ -191,33 +224,25 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     private fun initMap() {
-        try {
-            Configuration.getInstance().userAgentValue = packageName
+        Configuration.getInstance().userAgentValue = packageName
 
-            // Carto Dark Matter - Night navigation theme matching Google Maps dark mode
-            val cartoDark = object : XYTileSource(
-                "CartoDark",
-                0, 19, 256, ".png",
-                arrayOf(
-                    "https://a.basemaps.cartocdn.com/rastertiles/dark_all/",
-                    "https://b.basemaps.cartocdn.com/rastertiles/dark_all/",
-                    "https://c.basemaps.cartocdn.com/rastertiles/dark_all/"
-                )
-            ) {
-                override fun getTileURLString(pMapTileIndex: Long): String {
-                    return baseUrl + MapTileIndex.getZoom(pMapTileIndex) + "/" +
-                            MapTileIndex.getX(pMapTileIndex) + "/" +
-                            MapTileIndex.getY(pMapTileIndex) + mImageFilenameEnding
-                }
-            }
-            mapView.setTileSource(cartoDark)
-        } catch (e: Exception) {
-            mapView.setTileSource(TileSourceFactory.MAPNIK)
-        }
+        // Official OpenStreetMap tile source (Zero API key required)
+        mapView.setTileSource(TileSourceFactory.MAPNIK)
+
+        // Dark navigation HUD color filter (transforms standard OSM tiles into Google Maps night mode)
+        val darkMatrix = android.graphics.ColorMatrix(floatArrayOf(
+            -0.85f, 0f, 0f, 0f, 240f,
+            0f, -0.85f, 0f, 0f, 240f,
+            0f, 0f, -0.85f, 0f, 240f,
+            0f, 0f, 0f, 1f, 0f
+        ))
+        mapView.overlayManager.tilesOverlay.setColorFilter(android.graphics.ColorMatrixColorFilter(darkMatrix))
 
         mapView.setMultiTouchControls(true)
         mapView.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-        mapView.controller.setZoom(17.5)
+        mapView.minZoomLevel = 14.0
+        mapView.maxZoomLevel = 19.0
+        mapView.controller.setZoom(16.0)
 
         val startPoint = GeoPoint(drLat, drLon)
         mapView.controller.setCenter(startPoint)
