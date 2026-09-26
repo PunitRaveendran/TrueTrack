@@ -45,6 +45,10 @@ scratch/
 .gradle/
 android_app/.gradle/
 android_app/app/build/
+**/build/
+local.properties
+**/local.properties
+.cxx/
 *.apk
 *.aab
 
