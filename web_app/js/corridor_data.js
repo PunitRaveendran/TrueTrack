@@ -561,9 +561,10 @@ window.IMU_FFT_DATA = {
     0.111,
     0.117
   ],
-  "dominant_peak_hz": 4.9,
+  "dominant_peak_hz": 29.93,
+  "idle_peak_hz": 21.57,
   "measured_vibration_attenuation_db": -8.3,
-  "measurement_method": "35 Hz tone-injection sensitivity test (3.5 m/s^2 amplitude)"
+  "measurement_method": "Empirical Chennai drive logs (Varadarajapuram 29.9 Hz cruise / 45_46 21.6 Hz idle harmonic rejection)"
 };
 
 window.STRESS_TEST_METRICS = {

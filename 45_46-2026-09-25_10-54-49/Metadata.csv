@@ -1,0 +1,2 @@
+version,device name,recording epoch time,recording time,recording timezone,platform,appVersion,device id,sensors,sampleRateMs,standardisation,platform version
+3,SM-M356B,1790333689540,2026-09-25_10-54-49,Asia/Kolkata,android,1.66,83f3ec1c-6def-4c96-aad2-aab124509513,Accelerometer|Gravity|Gyroscope|Orientation|Compass|Location|Battery Temp|Annotation|TotalAcceleration|GyroscopeUncalibrated|AccelerometerUncalibrated,10|10|10|10|10|0|1000||10|10|10,false,36
