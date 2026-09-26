@@ -37,8 +37,18 @@ def compute_window_trajectories(
     df_grav = pd.read_csv(os.path.join(folder_path, 'Gravity.csv'))
     df_loc = pd.read_csv(os.path.join(folder_path, 'Location.csv'))
 
-    # Static mount alignment: rotate phone gravity vector to Earth vertical [+Z]
-    grav_mean = df_grav[['x', 'y', 'z']].values.mean(axis=0)
+    # Static mount alignment: calibrate ONLY on upright straight riding (|yaw_rate| < 0.05 rad/s)
+    # to avoid contaminating mount calibration with dynamic cornering lean angle.
+    t_gyro = df_gyro['seconds_elapsed'].values
+    gz_vals = df_gyro['z'].values
+    gz_interp = np.interp(df_grav['seconds_elapsed'].values, t_gyro, gz_vals)
+    mask_upright = (np.abs(gz_interp) < 0.05) & (df_grav['seconds_elapsed'] >= 5.0)
+
+    if mask_upright.sum() > 50:
+        grav_mean = df_grav.loc[mask_upright, ['x', 'y', 'z']].values.mean(axis=0)
+    else:
+        grav_mean = df_grav[['x', 'y', 'z']].values.mean(axis=0)
+
     g_unit = grav_mean / np.linalg.norm(grav_mean)
     target = np.array([0.0, 0.0, 1.0])
     v = np.cross(g_unit, target)

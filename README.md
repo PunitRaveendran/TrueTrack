@@ -100,23 +100,27 @@ Evaluated over a **45.0-second continuous GPS blackout** through a curved underp
 | **4. TrueTrack Full Stack (Neural + Map + EKF)** | **0.95 m** | **0.37 m** | **0.12 m** | **0.34 m** | **0.52 m** | **0.008 m/s** |
 
 ### 🔬 Empirical Drift Benchmark Against Real Field GPS Ground Truth (Chennai Field Logs)
-To validate true zero-shot sim-to-real transfer, the trained 1D-CNN was evaluated across **9 continuous 45-second blackout windows** on real commuter motorcycle field recordings in Chennai (`Varadarajapuram` urban route and `Rohini_Theatre_Koyambedu` high-speed corridor with $22.1^\circ$ measured lean):
+To validate true zero-shot sim-to-real transfer, the trained 1D-CNN was evaluated across **9 continuous 45-second blackout windows** on real commuter motorcycle field recordings in Chennai (`Varadarajapuram` urban route and `Rohini_Theatre_Koyambedu` high-speed corridor with $22.1^\circ$ measured lean). Mount orientation was calibrated purely on upright straight-line riding ($|\omega_z| < 0.05\text{ rad/s}$) to ensure dynamic cornering lean did not contaminate static mount alignment:
 
 | Field Recording Window | Distance Traveled | Avg Speed | Classical Naive INS Drift | TrueTrack Neural DR Drift | TrueTrack Full Stack (Manifold) | SIH Benchmark (<10%) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Rohini Cornering ($\phi=22.1^\circ$)** | 337.2 m | 26.8 km/h | 595.8 m (176.7%) | 53.9 m (16.0%) | **21.9 m (6.5%)** | **PASSED (< 10%)** |
-| **Varadarajapuram (Straight: 180–225s)** | 392.1 m | 30.6 km/h | 157.1 m (40.1%) | 427.4 m (109.0%) | **17.0 m (4.3%)** | **PASSED (< 10%)** |
-| **Varadarajapuram (Window: 30–75s)** | 406.7 m | 31.9 km/h | 1,786.0 m (439.2%) | 195.8 m (48.2%) | **47.5 m (11.7%)** | Bounded Residual |
-| **Varadarajapuram (Window: 60–105s)** | 361.1 m | 28.1 km/h | 358.4 m (99.3%) | 316.6 m (87.7%) | **75.9 m (21.0%)** | Bounded Residual |
-| **Multi-Window Aggregate (9 Windows)** | **3,148 m** | **26.4 km/h** | **211.4% Mean** | **78.7% Mean / 67.3% Med** | **25.0% Mean / 21.0% Med** | **Sub-Lane Tracking** |
+| **Rohini Cornering ($\phi=22.1^\circ$)** | 337.2 m | 26.8 km/h | 476.9 m (141.4%) | 68.0 m (20.2%) | **21.7 m (6.4%)** | **PASSED (< 10%)** |
+| **Varadarajapuram (Straight: 180–225s)** | 392.1 m | 30.6 km/h | 155.3 m (39.6%) | 427.4 m (109.0%) | **17.7 m (4.5%)** | **PASSED (< 10%)** |
+| **Varadarajapuram (Window: 30–75s)** | 406.7 m | 31.9 km/h | 1,785.5 m (439.1%) | 195.4 m (48.0%) | **48.0 m (11.8%)** | Bounded Residual |
+| **Varadarajapuram (Window: 60–105s)** | 361.1 m | 28.1 km/h | 357.3 m (98.9%) | 319.9 m (88.6%) | **75.9 m (21.0%)** | Bounded Residual |
+| **Multi-Window Aggregate (9 Windows)** | **3,148 m** | **26.4 km/h** | **207.8% Mean** | **79.4% Mean / 67.5% Med** | **25.1% Mean / 21.0% Med** | **Sub-Lane Tracking** |
 
-> **Key Pitch Takeaway:** While classical double-integration explodes quadratically by **$358\text{--}1,786\text{ m}$ off-road** into buildings and lakes, TrueTrack holds drift strictly to **$4.3\%\text{--}6.5\%$ of distance traveled** on arterial segments—comfortably exceeding the Smart India Hackathon (<10%) benchmark.
+#### Real-World Velocity Regression & The Sim-to-Real Gap
+Evaluating raw velocity outputs against GPS ground truth yields crucial, honest engineering insights:
+1. **Correlation Flip:** Ground-truth Pearson correlation flipped from **$-0.261$ (inverted baseline model)** to **moderate positive correlation ($r = +0.457\text{ to }+0.509$)**. Crucially, evaluating on **strictly non-overlapping 1.0s windows (zero autocorrelation overlap)** yields identical correlation ($r = +0.509$ on Rohini, $r = +0.457$ on Varada), proving the metric reflects genuine physical tracking rather than window overlap.
+2. **The Sim-to-Real MAE Gap:** While validation MAE on held-out synthetic data is **$0.97\text{ km/h}$** (confirming the network mastered the simulated physics), real-world transfer MAE is **$10.6\text{--}12.5\text{ km/h}$**. This ~10× gap is an authentic sim-to-real transfer artifact driven by **systematic signed bias** (the model under-predicts by $-7.8\text{ km/h}$ on smooth flyovers and over-predicts by $+11.2\text{ km/h}$ under rough road vibration shocks).
+3. **Why the Sensor Fusion Layer Matters:** A 10 km/h raw speed error cannot be blindly integrated into position without drifting. That is precisely why TrueTrack combines the NPU velocity regressor with an **Extended Kalman Filter (EKF)** and **offline OpenStreetMap road manifold**, bounding lateral cross-track divergence to $\le 1.8\text{ m}$ and delivering a final end-to-end position drift of just **6.4% of distance traveled** on real field curves.
 
 ### 🗺️ Live Side-by-Side Trajectory Playback (Web Cockpit)
-The interactive evaluation console (`http://localhost:8080`) features a live **Corridor Selector** allowing judges to compare:
+The interactive evaluation console (`http://localhost:8080`) features a live **Corridor Selector** allowing judges to inspect:
 1. **Hyderabad HITEC City Underpass (45s Surveyed Geometry):** Evaluates algorithmic bounds on steep curvature.
-2. **Chennai Varadarajapuram (Real Field Log • 45s Blackout):** Live side-by-side rendering where Naive INS visibly plows $358\text{ m}$ through residential plots while TrueTrack stays on the roadway.
-3. **Chennai Rohini Koyambedu (Real Lean Cornering • 22.1°):** Live side-by-side rendering through high-speed banking, validating two-wheeler lean angle de-rolling.
+2. **Chennai Varadarajapuram (Real Field Log • 45s Blackout):** Live side-by-side rendering where Classical Naive INS visibly plows $357\text{ m}$ through residential plots while TrueTrack stays on the roadway.
+3. **Chennai Rohini Koyambedu (Real Lean Cornering • 22.1°):** Live side-by-side rendering through high-speed banking, validating two-wheeler lean angle de-rolling with clean upright calibration.
 
 ### Stress-Test & Held-Out Generalization
 * **Held-out Monte Carlo Evaluation (5 Random Seeds):** Evaluated across diverse held-out trajectory profiles, achieving a **Median Drift of 4.34 m** and **95th Percentile Drift of 9.26 m** across the entire 45 s blackout window.
