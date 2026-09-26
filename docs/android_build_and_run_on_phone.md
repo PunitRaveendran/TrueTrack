@@ -59,9 +59,9 @@ $env:JAVA_HOME = 'C:\Users\Abhinav\Tools\jdk17\jdk-17.0.20.1+1'
 .\gradlew.bat :app:assembleDebug
 ```
 
-Output: `android_app\app\build\outputs\apk\debug\app-debug.apk` (~53 MB — bundles the
-`onnxruntime-android` native libraries, `truetrack_model.onnx`, `norm_stats.json` and
-`npu_model_spec.json`).
+Output: `android_app\app\build\outputs\apk\debug\app-debug.apk` (~56 MB — bundles the
+`onnxruntime-android` native libraries, `truetrack_model.onnx`, `norm_stats.json`,
+`npu_model_spec.json`, the 1300-frame `corridor_telemetry.json` and the offline OSM tiles).
 
 ---
 
