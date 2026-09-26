@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TrueTrack | Neural-Inertial Navigation Instrument</title>
-  <meta name="description" content="On-device neural-inertial dead reckoning and offline map-matching navigation instrument for GPS-denied urban corridors.">
+  <meta name="description" content="TrueTrack prototype cockpit for simulated GPS-denied navigation telemetry, with optional live Android telemetry and an on-demand OpenStreetMap basemap.">
   <link rel="stylesheet" href="lib/maplibre-gl.css">
   <link rel="stylesheet" href="styles.css?v=round3_p1">
 </head>
@@ -16,12 +16,12 @@
       <div class="intro-badge">INSTRUMENT BRIEFING</div>
       <h2 class="intro-title">TrueTrack Evaluation Console</h2>
       <p class="intro-text">
-        Benchmarking neural-inertial dead reckoning against standard double-integration across a 45 s underpass blackout on surveyed Hyderabad HITEC City road geometry.
+        Visualizing a precomputed synthetic 45 s blackout scenario on Hyderabad OpenStreetMap corridor geometry. The trajectory benchmark is ground-truth-assisted and is not an independent performance evaluation.
       </p>
       <div class="intro-meta">
-        <span>&bull; Real road survey nodes</span>
-        <span>&bull; Qualcomm SM8850 (Hexagon HTP INT8)</span>
-        <span>&bull; Discrete-time EKF</span>
+        <span>&bull; Local OSM corridor geometry</span>
+        <span>&bull; Android ONNX Runtime (provider unverified)</span>
+        <span>&bull; Synthetic, precomputed trajectory</span>
       </div>
       <button id="btn-dismiss-intro" class="btn-intro-dismiss">Enter Console &rarr;</button>
     </div>
@@ -39,9 +39,9 @@
 
     <!-- Single quiet status line -->
     <div class="header-status-line">
-      <span class="status-item">Simulated IMU on real road geometry</span>
+      <span class="status-item">Synthetic IMU on OSM corridor geometry</span>
       <span class="status-sep">&bull;</span>
-      <span class="status-item">Qualcomm SM8850 HTP INT8 &bull; ~1.4 ms budget</span>
+      <span class="status-item">Android ONNX Runtime &bull; execution provider unverified</span>
       <span class="status-sep">&bull;</span>
       <div class="gps-status-dot" id="gps-status-dot" title="GNSS status"></div>
       <span class="gps-status-label" id="gps-status-label">GPS locked (simulated)</span>
@@ -96,7 +96,7 @@
 
     <!-- ==================================================================
          PRIORITY 1: THREE-TRACE LIVE COCKPIT VISUALIZATION (Spec section 6)
-         Panel A (raw IMU input, chaotic) and Panel B (NPU output, smooth) live
+         Panel A (raw IMU input, chaotic) and Panel B (model output, smooth) live
          outside the diagnostics drawer, so all three panels (A, B and the map
          puck) are visible simultaneously during live playback. Both canvases
          share the drift chart's time domain (0-130 s), 15 s tick grid and the
@@ -104,11 +104,11 @@
          ================================================================== -->
     <section class="trace-strip" id="trace-strip">
 
-      <!-- Panel A: raw 6-axis IMU input, 3 channels in 3 colours (vibration-visible) -->
+      <!-- Panel A: three selected raw IMU channels in distinct colours. -->
       <div class="trace-panel">
         <div class="trace-head">
-          <span class="trace-title">Panel A &mdash; Raw IMU input</span>
-          <span class="trace-badge trace-badge-chaotic">raw sensor stream &bull; chaotic</span>
+          <span class="trace-title">RAW IMU INPUT</span>
+          <span class="trace-badge trace-badge-chaotic">precomputed 10 Hz samples &bull; chaotic</span>
           <span class="trace-scales">ax, ay &plusmn;5 m/s&sup2; &bull; gz &plusmn;0.15 rad/s</span>
           <div class="trace-legend">
             <span class="trace-key"><i class="trace-swatch swatch-ax"></i>ax</span>
@@ -119,11 +119,11 @@
         <canvas id="canvas-imu-trace" class="trace-canvas" width="1520" height="88"></canvas>
       </div>
 
-      <!-- Panel B: neural NPU output, speed + yaw-rate regression (smooth) -->
+      <!-- Panel B: precomputed neural model output, speed + yaw-rate regression (smooth) -->
       <div class="trace-panel">
         <div class="trace-head">
-          <span class="trace-title">Panel B &mdash; NPU output</span>
-          <span class="trace-badge trace-badge-neural">1D-CNN regression &bull; smooth</span>
+          <span class="trace-title">NEURAL OUTPUT</span>
+          <span class="trace-badge trace-badge-neural">precomputed synthetic 1D-CNN output &bull; smooth</span>
           <span class="trace-scales">speed 0&ndash;50 km/h &bull; yaw rate &plusmn;3 &deg;/s</span>
           <div class="trace-legend">
             <span class="trace-key"><i class="trace-swatch swatch-speed"></i>speed</span>
@@ -136,7 +136,20 @@
       <!-- Shared timeline footer (panel C is the map puck above) -->
       <div class="trace-axis-footer">
         <span class="trace-axis-note">Panel C: map puck above &bull; shared time axis with the drift chart (0&ndash;130 s &bull; 15 s ticks &bull; live needle)</span>
-        <span class="trace-clock" id="trace-clock">t = 0.0 s &bull; GPS locked</span>
+        <span class="trace-clock" id="trace-clock">Loading simulated playback...</span>
+      </div>
+
+      <div class="trace-controls">
+        <label class="trace-control" for="playback-speed-slider">
+          <span class="trace-control-heading">Playback speed <output id="playback-speed-value" for="playback-speed-slider">1.00x</output></span>
+          <input id="playback-speed-slider" class="cockpit-range" type="range" min="0.25" max="4" step="0.05" value="1" aria-label="Continuous playback speed">
+          <span class="trace-control-caption">Continuous speed · preset buttons remain available below</span>
+        </label>
+        <label class="trace-control" for="model-resolution-slider" title="Visual demonstration only. The replay is precomputed at 10 Hz; this slider skips replay samples and does not change inference.">
+          <span class="trace-control-heading">Input Resolution Demo <output id="model-resolution-value" for="model-resolution-slider">1× · full replay</output></span>
+          <input id="model-resolution-slider" class="cockpit-range" type="range" min="0" max="2" step="1" value="0" aria-label="Replay sample decimation factor">
+          <span class="trace-control-caption">10 Hz replay only: skips samples and adds synthetic output noise to illustrate a resolution tradeoff.</span>
+        </label>
       </div>
     </section>
     </section>
@@ -144,19 +157,21 @@
     <!-- Right Column: Precision Readouts & Controls -->
     <aside class="side-panel">
 
-      <!-- 5-STAGE PIPELINE ACTIVE STATE INDICATOR -->
+      <!-- 6-STAGE PIPELINE ACTIVE STATE INDICATOR -->
       <section class="panel-section pipeline-section">
         <div class="section-label">Navigation pipeline flow</div>
         <div class="pipeline-flow" id="pipeline-flow">
-          <div class="pipe-node active" id="pipe-node-imu" title="50 Hz IMU inertial streaming">IMU 50Hz</div>
+          <div class="pipe-node active" id="pipe-node-imu" title="Model input schema targets 50 Hz; browser telemetry replay is precomputed at 10 Hz">IMU 50Hz</div>
           <span class="pipe-arrow">&rarr;</span>
-          <div class="pipe-node active" id="pipe-node-cnn" title="1D-CNN NPU speed/yaw inference">1D-CNN</div>
+          <div class="pipe-node active" id="pipe-node-lean" title="Synthetic lean de-roll ablation in browser replay; Android de-roll defaults off until the model is retrained with matching inputs">Lean de-roll</div>
           <span class="pipe-arrow">&rarr;</span>
-          <div class="pipe-node active" id="pipe-node-ekf" title="EKF Riccati covariance propagation">EKF P</div>
+          <div class="pipe-node active" id="pipe-node-cnn" title="Precomputed 1D-CNN speed/yaw output in the browser demo">1D-CNN</div>
           <span class="pipe-arrow">&rarr;</span>
-          <div class="pipe-node" id="pipe-node-osm" title="OSM road manifold orthogonal snapping">OSM Snap</div>
+          <div class="pipe-node active" id="pipe-node-covariance" title="Precomputed synthetic covariance proxy; not a live phone EKF">Covariance</div>
           <span class="pipe-arrow">&rarr;</span>
-          <div class="pipe-node" id="pipe-node-blend" title="3s Sigmoid smooth reconciliation">Blend</div>
+          <div class="pipe-node" id="pipe-node-osm" title="Ground-truth-assisted road projection in the synthetic replay; not live OSM map matching">Road Projection</div>
+          <span class="pipe-arrow">&rarr;</span>
+          <div class="pipe-node" id="pipe-node-blend" title="Synthetic 3-second ground-truth blend; not live GPS fusion">Blend</div>
         </div>
       </section>
 
@@ -171,11 +186,11 @@
           <div class="hero-col hero-legacy">
             <div class="hero-label">Legacy navigation</div>
             <div class="hero-figure-row">
-              <span class="hero-number" id="hero-drift-legacy">0.0</span>
+              <span class="hero-number" id="hero-drift-legacy">--</span>
               <span class="hero-unit">m</span>
             </div>
             <canvas id="canvas-spark-legacy" class="mini-sparkline" width="130" height="22"></canvas>
-            <div class="hero-desc" id="hero-legacy-sub">Standard double-integration</div>
+            <div class="hero-desc" id="hero-legacy-sub">Waiting for replay</div>
           </div>
 
           <div class="hero-divider"></div>
@@ -184,14 +199,14 @@
           <div class="hero-col hero-tt">
             <div class="hero-label">TrueTrack stack</div>
             <div class="hero-figure-row">
-              <span class="hero-number" id="hero-drift-tt">0.0</span>
+              <span class="hero-number" id="hero-drift-tt">--</span>
               <span class="hero-unit">m</span>
             </div>
             <canvas id="canvas-spark-tt" class="mini-sparkline" width="130" height="22"></canvas>
-            <div class="hero-desc" id="hero-tt-sub">Neural-inertial + road manifold</div>
+            <div class="hero-desc" id="hero-tt-sub">Waiting for replay</div>
           </div>
         </div>
-        <div class="hero-status-caption" id="hero-status-caption">at 0:38 &bull; GPS locked (both &asymp; 0)</div>
+        <div class="hero-status-caption" id="hero-status-caption">Loading synthetic playback...</div>
       </section>
 
       <!-- LIVE ERROR OVER TIME CHART (Expanded to 180px, Log Scale, Crosshair Hover) -->
@@ -212,14 +227,14 @@
               <input type="checkbox" id="toggle-neural" checked>
               <span class="switch-slider"></span>
             </label>
-            <span class="ablation-text">1D-CNN neural velocity regressor</span>
+              <span class="ablation-text">1D-CNN speed/yaw output (precomputed)</span>
           </div>
           <div class="ablation-switch-item">
             <label class="switch-toggle">
               <input type="checkbox" id="toggle-map" checked>
               <span class="switch-slider"></span>
             </label>
-            <span class="ablation-text">OSM road-manifold constraint</span>
+            <span class="ablation-text" title="Ground-truth-assisted road projection in this synthetic replay; not live OSM map matching">Road projection (synthetic replay)</span>
           </div>
           <div class="ablation-switch-item" id="lbl-toggle-sigmoid">
             <label class="switch-toggle">
@@ -233,15 +248,15 @@
               <input type="checkbox" id="toggle-lean" checked>
               <span class="switch-slider"></span>
             </label>
-            <span class="ablation-text">Two-wheeler lean-corrected NHC</span>
+            <span class="ablation-text">Lean de-roll (simulated ablation)</span>
           </div>
         </div>
       </section>
 
-      <!-- EMPIRICAL BENCHMARKS (Headline Held-Out Distribution Promoted Above Table) -->
+      <!-- Synthetic, ground-truth-assisted diagnostics; not empirical benchmarks. -->
       <section class="panel-section benchmarks-section">
         <div class="benchmark-headline-card">
-          <div class="bh-label">Held-out 5-Seed Monte Carlo Distribution</div>
+          <div class="bh-label">Five noise seeds · one synthetic route · ground-truth-assisted</div>
           <div class="bh-stat-row">
             <span class="bh-stat"><strong class="bh-num">4.34 m</strong> median drift</span>
             <span class="bh-sep">&bull;</span>
@@ -249,9 +264,9 @@
           </div>
         </div>
 
-        <details class="benchmark-details" open id="benchmarks-details">
+        <details class="benchmark-details" id="benchmarks-details">
           <summary class="benchmark-summary">
-            <span class="section-label benchmark-heading">Measured 45 s corridor benchmarks</span>
+            <span class="section-label benchmark-heading">Generated 45 s scenario outputs (not real-world measurements)</span>
             <span class="summary-arrow">&blacktriangledown;</span>
           </summary>
           <div class="benchmark-content">
@@ -280,30 +295,22 @@
                   <td class="num-col">52.4 m</td>
                 </tr>
                 <tr class="tt-row">
-                  <td>4. TrueTrack stack (Straight)</td>
+                  <td>4. Synthetic stack (ground-truth-assisted map projection)</td>
                   <td class="num-col tt-txt">0.95 m</td>
                   <td class="num-col tt-txt">0.37 m</td>
-                </tr>
-                <tr>
-                  <td>5. Standard car NHC (Cornering φ=21°)</td>
-                  <td class="num-col error-txt">5.93 m</td>
-                  <td class="num-col error-txt">5.93 m</td>
-                </tr>
-                <tr class="tt-row">
-                  <td>6. Lean-corrected NHC (Cornering)</td>
-                  <td class="num-col tt-txt">1.80 m</td>
-                  <td class="num-col tt-txt">1.80 m</td>
                 </tr>
               </tbody>
             </table>
 
+            <p class="diag-footer">All figures are outputs from one synthetic route. Blackout map projection uses per-frame ground truth; the five-seed range is same-route noise sensitivity, not held-out validation. Cornering figures are omitted because their artifact has no reproducible generator.</p>
+
             <div class="quiet-callouts">
               <div class="callout-line">
-                <span class="callout-key">OSM map perturbation (2.0 m offset):</span>
+                <span class="callout-key">Synthetic map-offset scenario (2.0 m perturbation):</span>
                 <span class="callout-val">2.61 m max error</span>
               </div>
               <div class="callout-line">
-                <span class="callout-key">Held-out distribution (5 seeds):</span>
+                <span class="callout-key">Same-route sensor-noise sensitivity (5 seeds):</span>
                 <span class="callout-val">Median 4.34 m &bull; 95th %ile 9.26 m</span>
               </div>
             </div>
@@ -315,7 +322,7 @@
       <div class="drawer-trigger-wrap">
         <button id="btn-hood-toggle" class="btn-drawer-trigger">
           <span id="hood-toggle-arrow">&blacktriangledown;</span>
-          <span>Under the hood diagnostics (IMU &bull; FFT &bull; EKF)</span>
+          <span>Under the hood diagnostics (IMU &bull; FFT &bull; covariance proxy)</span>
         </button>
       </div>
 
@@ -331,27 +338,27 @@
       <div class="diag-col">
         <div class="diag-header">
           <span class="diag-title">Raw 6-axis IMU stream</span>
-          <span class="diag-badge">50 Hz</span>
+          <span class="diag-badge">Precomputed · 10 Hz</span>
         </div>
         <canvas id="canvas-imu-wave" class="diag-canvas" width="360" height="90"></canvas>
         <div class="diag-footer" id="hood-imu-meta">ax: 0.00 &bull; ay: 0.00 &bull; gz: 0.000 rad/s</div>
       </div>
 
-      <!-- Panel 2: Live FFT Frequency Spectrum -->
+      <!-- Panel 2: Precomputed spectrum from synthetic telemetry -->
       <div class="diag-col">
         <div class="diag-header">
-          <span class="diag-title">IMU spectrum (0–50 Hz)</span>
-          <span class="diag-badge">Engine peak: 29.9 Hz (Drive Log)</span>
+          <span class="diag-title">Synthetic IMU spectrum (0–25 Hz)</span>
+          <span class="diag-badge">Illustrative · not a drive measurement</span>
         </div>
         <canvas id="canvas-fft" class="diag-canvas" width="360" height="90"></canvas>
-        <div class="diag-footer">Vibration rejection: -8.3 dB (Empirical 21.6 Hz idle & 29.9 Hz cruise isolation)</div>
+        <div class="diag-footer">Precomputed synthetic signal. No measured vibration rejection result is available.</div>
       </div>
 
-      <!-- Panel 3: Neural Inference & EKF Covariance -->
+      <!-- Panel 3: Precomputed neural outputs and synthetic covariance proxy -->
       <div class="diag-col">
         <div class="diag-header">
           <span class="diag-title">State estimation</span>
-          <span class="diag-badge">Discrete-time EKF</span>
+          <span class="diag-badge">Precomputed synthetic covariance</span>
         </div>
         <div class="state-metrics-grid">
           <div class="state-metric">
@@ -371,7 +378,7 @@
             <span class="s-val tt-txt" id="hood-sigma-cross">0.21 m</span>
           </div>
         </div>
-        <div class="diag-footer">Road manifold bounds lateral &sigma;<sub>&perp;</sub> &le; 0.18 m inside tunnel</div>
+        <div class="diag-footer">Illustrative uncertainty proxy only; no live covariance filter or measured lane bound.</div>
       </div>
 
     </div>
@@ -388,11 +395,11 @@
         </svg>
       </button>
 
-      <button id="btn-kill-gps" class="btn-transport btn-warn" title="Manually inject instant GPS blackout">
+      <button id="btn-kill-gps" class="btn-transport btn-warn" title="Illustrative only: manual blackout uses scripted trajectories, not a live leak-free estimate">
         <span>Kill GPS</span>
       </button>
 
-      <button id="btn-vibe" class="btn-transport" title="Inject 29.9 Hz engine vibration harmonic (Varadarajapuram drive log)">
+      <button id="btn-vibe" class="btn-transport" title="Inject a synthetic oscillation into the 10 Hz replay (illustrative, not a measured engine harmonic)">
         <span>Vibe test</span>
       </button>
 
@@ -435,7 +442,7 @@
     </div>
   </footer>
 
-  <!-- Scripts: 100% Offline MapLibre GL & Engines -->
+  <!-- MapLibre and simulation code are local; the base map uses viewed OSM tiles over the network. -->
   <script src="lib/maplibre-gl.js"></script>
   <script src="js/corridor_data.js?v=round3_v3"></script>
   <script src="js/navigation_engine.js?v=round3_p1"></script>

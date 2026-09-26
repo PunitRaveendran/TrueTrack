@@ -7,13 +7,15 @@ class TrueTrackCockpit {
   constructor() {
     this.telemetry = window.SIMULATION_TELEMETRY || [];
     this.metrics = window.BENCHMARK_METRICS || {};
-    this.fftData = window.IMU_FFT_DATA || { freqs: [], magnitudes: [], dominant_peak_hz: 29.93, measured_vibration_attenuation_db: -8.3 };
+    this.fftData = window.IMU_FFT_DATA || { freqs: [], magnitudes: [] };
     this.stressMetrics = window.STRESS_TEST_METRICS || {};
     this.distMetrics = window.DISTRIBUTION_METRICS || {};
 
     this.currentIndex = 380; // Default starts 2s before blackout at t=38s, showing clear GPS lock first
     this.isPlaying = true;
     this.playbackSpeed = 1.0;
+    this.playbackSpeedContinuous = 1.0;
+    this.decimationFactor = 1;
     this.lastFrameTime = performance.now();
 
     // Smooth Display Tweens for Hero Numbers
@@ -52,6 +54,7 @@ class TrueTrackCockpit {
     this.isPhoneLive = false;
     this.phoneSocket = null;
     this.phoneTelemetry = null;
+    this.livePhoneTrail = [];
 
     // State Tracking
     this.prevBlackoutState = false;
@@ -72,7 +75,7 @@ class TrueTrackCockpit {
   }
 
   /* ========================================================================
-     1. MapLibre GL Initialization (100% Offline, Zero Cloud Dependencies)
+     1. MapLibre GL Initialization (local cockpit; OSM basemap tiles load on demand)
      ======================================================================== */
   initMap() {
     // Center initially on full corridor overview (Cyber Towers to Mindspace)
@@ -86,8 +89,8 @@ class TrueTrackCockpit {
       zoom: 15.5,
       pitch: 0,
       bearing: 0,
-      attributionControl: false,
-      maxBounds: [[78.366, 17.435], [78.392, 17.455]], // Strictly constrained to available local tile coverage
+      attributionControl: true,
+      maxBounds: [[78.366, 17.435], [78.392, 17.455]], // Keep the view focused on this corridor
       minZoom: 14.5,
       maxZoom: 17.5,
       style: {
@@ -95,9 +98,9 @@ class TrueTrackCockpit {
         sources: {
           'osm-tiles': {
             type: 'raster',
-            tiles: ['./tiles/{z}/{x}/{y}.png'],
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
             tileSize: 256,
-            attribution: '&copy; OpenStreetMap contributors | Offline Bundle'
+            attribution: '&copy; OpenStreetMap contributors'
           }
         },
         layers: [
@@ -247,8 +250,8 @@ class TrueTrackCockpit {
         }
       });
 
-      // Discrete-Time EKF Covariance Ellipse
-      this.map.addSource('ekf-ellipse-source', {
+      // Precomputed synthetic covariance proxy (not a live phone EKF).
+      this.map.addSource('covariance-ellipse-source', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[]] } }
       });
@@ -333,6 +336,28 @@ class TrueTrackCockpit {
     const btnDrawer = document.getElementById('btn-hood-toggle');
     const slider = document.getElementById('timeline-slider');
     const speedBtns = document.querySelectorAll('.btn-speed');
+    const continuousSpeedSlider = document.getElementById('playback-speed-slider');
+    const resolutionSlider = document.getElementById('model-resolution-slider');
+    const resolutionFactors = [1, 2, 5];
+
+    this.setPlaybackSpeed(1.0, 1.0);
+
+    if (continuousSpeedSlider) {
+      continuousSpeedSlider.addEventListener('input', (e) => {
+        this.setPlaybackSpeed(parseFloat(e.target.value));
+      });
+    }
+
+    if (resolutionSlider) {
+      resolutionSlider.addEventListener('input', (e) => {
+        const factor = resolutionFactors[parseInt(e.target.value, 10)] || 1;
+        this.decimationFactor = factor;
+        const output = document.getElementById('model-resolution-value');
+        if (output) output.textContent = factor === 1 ? '1× · full replay' : `${factor}× · every ${factor}th sample`;
+        this.lastTraceKey = -1;
+        this.render();
+      });
+    }
 
     if (btnPlay) {
       btnPlay.addEventListener('click', () => {
@@ -440,7 +465,7 @@ class TrueTrackCockpit {
         speedBtns.forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         const spd = parseFloat(btn.dataset.speed || btn.getAttribute('data-speed'));
-        this.playbackSpeed = isNaN(spd) ? 1.0 : spd;
+        this.setPlaybackSpeed(isNaN(spd) ? 1.0 : spd, isNaN(spd) ? null : spd);
       });
     });
 
@@ -476,6 +501,23 @@ class TrueTrackCockpit {
         const btn = document.querySelector(`.btn-speed[data-speed="${e.key}.0"]`);
         if (btn) btn.click();
       }
+    });
+  }
+
+  setPlaybackSpeed(speed, presetSpeed = null) {
+    const maxSpeed = presetSpeed === null ? 4.0 : 8.0;
+    const clampedSpeed = Math.max(0.25, Math.min(maxSpeed, speed));
+    this.playbackSpeedContinuous = clampedSpeed;
+    this.playbackSpeed = clampedSpeed;
+
+    const slider = document.getElementById('playback-speed-slider');
+    const output = document.getElementById('playback-speed-value');
+    if (slider) slider.value = Math.min(4.0, clampedSpeed);
+    if (output) output.textContent = `${clampedSpeed.toFixed(2)}x`;
+
+    document.querySelectorAll('.btn-speed').forEach((btn) => {
+      btn.classList.toggle('active', presetSpeed !== null &&
+        Math.abs(parseFloat(btn.dataset.speed || btn.getAttribute('data-speed')) - presetSpeed) < 0.001);
     });
   }
 
@@ -558,9 +600,12 @@ class TrueTrackCockpit {
 
         this.phoneSocket.onopen = () => {
           this.isPhoneLive = true;
+          this.lastRenderedIdx = -1;
+          this.lastCameraIdx = -1;
           if (dot) dot.classList.add('connected');
-          if (label) label.textContent = 'Phone: Live (50Hz)';
+          if (label) label.textContent = 'Phone: Live (~10Hz)';
           if (btnPhoneLink) btnPhoneLink.classList.add('active');
+          this.render();
           this.playTone(880, 'sine', 0.2);
         };
 
@@ -574,6 +619,9 @@ class TrueTrackCockpit {
 
         this.phoneSocket.onclose = () => {
           this.isPhoneLive = false;
+          this.lastRenderedIdx = -1;
+          this.lastCameraIdx = -1;
+          this.render();
           if (dot) dot.classList.remove('connected');
           if (label) label.textContent = 'Phone Link';
           if (btnPhoneLink) btnPhoneLink.classList.remove('active');
@@ -581,6 +629,9 @@ class TrueTrackCockpit {
 
         this.phoneSocket.onerror = () => {
           this.isPhoneLive = false;
+          this.lastRenderedIdx = -1;
+          this.lastCameraIdx = -1;
+          this.render();
           if (dot) dot.classList.remove('connected');
           if (label) label.textContent = 'Phone Link (retry)';
         };
@@ -595,7 +646,7 @@ class TrueTrackCockpit {
         if (this.isPhoneLive && this.phoneSocket) {
           this.phoneSocket.close();
         } else {
-          const customHost = prompt("Enter iQOO phone address:port (or leave localhost:8765 if using 'adb reverse tcp:8765 tcp:8765'):", "localhost:8765");
+          const customHost = prompt("Connect through USB with 'adb reverse tcp:8765 tcp:8765' and use localhost:8765:", "localhost:8765");
           if (customHost) connectWs(customHost.trim());
         }
       });
@@ -606,7 +657,7 @@ class TrueTrackCockpit {
   }
 
   onLivePhoneFrame(data) {
-    // Dynamic updates directly from physical iQOO phone
+    // Dynamic updates from the Android phone bridge (about 10 Hz at current inference cadence).
     const speedEl = document.getElementById('hood-speed-val');
     if (speedEl && data.speed !== undefined) speedEl.textContent = `${data.speed.toFixed(1)} km/h`;
 
@@ -615,37 +666,21 @@ class TrueTrackCockpit {
 
     const metaEl = document.getElementById('hood-imu-meta');
     if (metaEl && data.ax !== undefined) {
-      metaEl.textContent = `ax: ${data.ax.toFixed(2)} • ay: ${data.ay.toFixed(2)} • lean: ${data.lean.toFixed(1)}° • NPU: ${data.latency.toFixed(1)}ms`;
+      metaEl.textContent = `ax: ${data.ax.toFixed(2)} • ay: ${data.ay.toFixed(2)} • lean: ${data.lean.toFixed(1)}° • ORT: ${data.latency.toFixed(1)}ms`;
+    }
+    const phoneLinkLabel = document.getElementById('phone-bridge-label');
+    if (phoneLinkLabel) {
+      phoneLinkLabel.textContent = data.blackout ? 'Phone: Blackout' : 'Phone: Live (~10Hz)';
     }
 
-    // Direct on-device autonomous dead reckoning marker sync
-    if (data.lat !== undefined && data.lon !== undefined && this.map && this.mapLoaded && this.carMarker) {
-      this.carMarker.setLngLat([data.lon, data.lat]);
+    if (Number.isFinite(data.lat) && Math.abs(data.lat) <= 90 &&
+        Number.isFinite(data.lon) && Math.abs(data.lon) <= 180) {
+      this.livePhoneTrail.push([data.lon, data.lat]);
+      if (this.livePhoneTrail.length > 250) this.livePhoneTrail.shift();
     }
-
-    // Reflect live blackout toggled from physical phone button
-    if (data.blackout !== undefined && data.blackout !== this.manualGpsKill) {
-      this.manualGpsKill = data.blackout;
-      const curIdx = Math.floor(this.currentIndex);
-      const curTime = this.telemetry[curIdx] ? this.telemetry[curIdx].t : 0;
-      if (this.manualGpsKill) {
-        this.manualKillStartIdx = curIdx;
-        this.manualKillStartTime = curTime;
-        this.manualRestoreStartTime = null;
-        this.manualRestoreStartIdx = null;
-      } else {
-        this.manualRestoreStartTime = curTime;
-        this.manualRestoreStartIdx = curIdx;
-      }
-      const btnKill = document.getElementById('btn-kill-gps');
-      if (btnKill) {
-        btnKill.classList.toggle('active', this.manualGpsKill);
-        btnKill.textContent = this.manualGpsKill ? 'Restore GPS' : 'Kill GPS';
-      }
-      this.lastRenderedIdx = -1;
-      this.updateHUD();
-      this.render();
-    }
+    this.lastRenderedIdx = -1;
+    this.lastCameraIdx = -1;
+    this.render();
   }
 
   /* ========================================================================
@@ -704,7 +739,7 @@ class TrueTrackCockpit {
     this.canvasTimelineSpark = document.getElementById('canvas-timeline-spark');
     this.ctxTimelineSpark = this.canvasTimelineSpark ? this.canvasTimelineSpark.getContext('2d') : null;
 
-    // Priority 1: always-visible three-trace strip canvases (raw IMU vs NPU output)
+    // Priority 1: always-visible three-trace strip canvases (raw IMU vs model output)
     this.canvasImuTrace = document.getElementById('canvas-imu-trace');
     this.ctxImuTrace = this.canvasImuTrace ? this.canvasImuTrace.getContext('2d') : null;
 
@@ -773,6 +808,11 @@ class TrueTrackCockpit {
     let inSigmoidRestore = false;
     let restoreAlpha = 1.0;
 
+    // TODO: The manual "Kill GPS" display is scripted/illustrative, not a computed DR trajectory:
+    // legacy error follows a capped quadratic and full-stack error follows 0.35 + 0.08*sin(2t),
+    // while the TrueTrack marker remains at d.gt. corridor_data.js has precomputed scheduled
+    // trajectories, but generate_extended_benchmarks.py constructs its road-manifold position
+    // from gt_x/gt_y (gt_p), so it is ground-truth-assisted and not a leak-free manual substitute.
     if (this.manualGpsKill && this.manualKillStartTime !== null) {
       if (index >= this.manualKillStartIdx) {
         isManualBO = true;
@@ -908,9 +948,9 @@ class TrueTrackCockpit {
         const boElapsed = frame.manualElapsedSec > 0
           ? Math.floor(frame.manualElapsedSec)
           : Math.max(0, Math.floor(cur.t - 40.0));
-        this.traceClock.textContent = 't = ' + cur.t.toFixed(1) + ' s \u00b7 blackout, ' + boElapsed + ' s in';
+        this.traceClock.textContent = 't = ' + cur.t.toFixed(1) + ' s \u00b7 simulated blackout, ' + boElapsed + ' s in';
       } else {
-        this.traceClock.textContent = 't = ' + cur.t.toFixed(1) + ' s \u00b7 GPS locked';
+        this.traceClock.textContent = 't = ' + cur.t.toFixed(1) + ' s \u00b7 GPS locked (simulated)';
       }
     }
 
@@ -972,7 +1012,7 @@ class TrueTrackCockpit {
           : Math.max(0, Math.floor(cur.t - 40.0));
         heroCaption.textContent = `at ${timeStr} \u00b7 blackout, ${elapsed} s in`;
       } else {
-        heroCaption.textContent = `at ${timeStr} \u00b7 GPS locked (both \u2248 0)`;
+        heroCaption.textContent = `at ${timeStr} \u00b7 GPS locked (simulated; both \u2248 0)`;
       }
     }
 
@@ -1011,9 +1051,14 @@ class TrueTrackCockpit {
     const curFrame = this.getFrameState(cur, i0);
     const nxtFrame = this.getFrameState(nxt, i1);
 
-    // Sub-frame continuous linear interpolation (LERP) for silky-smooth 60 FPS motion
-    const ttLat = curFrame.ttCoord[0] + (nxtFrame.ttCoord[0] - curFrame.ttCoord[0]) * frac;
-    const ttLng = curFrame.ttCoord[1] + (nxtFrame.ttCoord[1] - curFrame.ttCoord[1]) * frac;
+    // Sub-frame interpolation for the simulation puck; when a phone is connected,
+    // its validated coordinates own the TrueTrack puck instead of being overwritten here.
+    const simTtLat = curFrame.ttCoord[0] + (nxtFrame.ttCoord[0] - curFrame.ttCoord[0]) * frac;
+    const simTtLng = curFrame.ttCoord[1] + (nxtFrame.ttCoord[1] - curFrame.ttCoord[1]) * frac;
+    const livePhonePosition = this.isPhoneLive && this.phoneTelemetry &&
+      Number.isFinite(this.phoneTelemetry.lat) && Number.isFinite(this.phoneTelemetry.lon);
+    const ttLat = livePhonePosition ? this.phoneTelemetry.lat : simTtLat;
+    const ttLng = livePhonePosition ? this.phoneTelemetry.lon : simTtLng;
 
     const legLat = curFrame.legCoord[0] + (nxtFrame.legCoord[0] - curFrame.legCoord[0]) * frac;
     const legLng = curFrame.legCoord[1] + (nxtFrame.legCoord[1] - curFrame.legCoord[1]) * frac;
@@ -1038,7 +1083,9 @@ class TrueTrackCockpit {
     if (this.markerTT) {
       this.markerTT.setLngLat([ttLng, ttLat]);
       const arrowTT = document.getElementById('puck-arrow-tt');
-      if (arrowTT) arrowTT.style.transform = `rotate(${interpHeading}deg)`;
+      const ttHeading = livePhonePosition && Number.isFinite(this.phoneTelemetry.heading)
+        ? this.phoneTelemetry.heading : interpHeading;
+      if (arrowTT) arrowTT.style.transform = `rotate(${ttHeading}deg)`;
     }
 
     if (this.mapLoaded && this.map) {
@@ -1060,60 +1107,55 @@ class TrueTrackCockpit {
       if (i0 !== this.lastRenderedIdx) {
         this.lastRenderedIdx = i0;
 
-        const legHistory = [];
-        const ttHistory = [];
-        for (let i = 0; i <= i0; i++) {
-          const d = this.telemetry[i];
-          const f = this.getFrameState(d, i);
-          legHistory.push([f.legCoord[1], f.legCoord[0]]);
-          ttHistory.push([f.ttCoord[1], f.ttCoord[0]]);
-        }
-        // Connect history seamlessly to current interpolated tip
-        ttHistory.push([ttLng, ttLat]);
-        legHistory.push([legLng, legLat]);
-
         const srcTT = this.map.getSource('tt-history');
-        if (srcTT) srcTT.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: ttHistory } });
-
         const srcLeg = this.map.getSource('legacy-history');
-        if (srcLeg) srcLeg.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: legHistory } });
-
-        // Update Semi-Transparent Tethers
         const srcTether = this.map.getSource('tether-lines');
-        if (srcTether) {
-          srcTether.setData({
-            type: 'FeatureCollection',
-            features: [
-              {
-                type: 'Feature',
-                properties: { color: '#ef4444' },
-                geometry: { type: 'LineString', coordinates: [[gtLng, gtLat], [legLng, legLat]] }
-              },
-              {
-                type: 'Feature',
-                properties: { color: '#38bdf8' },
-                geometry: { type: 'LineString', coordinates: [[gtLng, gtLat], [ttLng, ttLat]] }
-              }
-            ]
-          });
+        if (this.isPhoneLive) {
+          if (srcTT) srcTT.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: this.livePhoneTrail } });
+          if (srcLeg) srcLeg.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: [] } });
+          if (srcTether) srcTether.setData({ type: 'FeatureCollection', features: [] });
+          const ellipse = this.map.getSource('covariance-ellipse-source');
+          if (ellipse) ellipse.setData({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [[]] } });
+          if (this.markerLegacy) this.markerLegacy.getElement().style.display = 'none';
+        } else {
+          const legHistory = [];
+          const ttHistory = [];
+          for (let i = 0; i <= i0; i++) {
+            const d = this.telemetry[i];
+            const f = this.getFrameState(d, i);
+            legHistory.push([f.legCoord[1], f.legCoord[0]]);
+            ttHistory.push([f.ttCoord[1], f.ttCoord[0]]);
+          }
+          ttHistory.push([ttLng, ttLat]);
+          legHistory.push([legLng, legLat]);
+          if (srcTT) srcTT.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: ttHistory } });
+          if (srcLeg) srcLeg.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: legHistory } });
+          if (srcTether) {
+            srcTether.setData({
+              type: 'FeatureCollection',
+              features: [
+                { type: 'Feature', properties: { color: '#ef4444' }, geometry: { type: 'LineString', coordinates: [[gtLng, gtLat], [legLng, legLat]] } },
+                { type: 'Feature', properties: { color: '#38bdf8' }, geometry: { type: 'LineString', coordinates: [[gtLng, gtLat], [ttLng, ttLat]] } }
+              ]
+            });
+          }
+          if (this.markerLegacy) this.markerLegacy.getElement().style.display = '';
+          this.renderCovarianceEllipse([ttLng, ttLat], cur.sigma_along * 2.0, cur.sigma_cross * 2.0, interpHeading);
         }
-
-        // Render Real EKF Covariance Confidence Ellipse at vehicle position
-        this.renderEkfEllipse([ttLng, ttLat], cur.sigma_along * 2.0, cur.sigma_cross * 2.0, interpHeading);
       }
     }
 
     // Diagnostic Canvases
     this.drawErrorChart(i0);
 
-    // Priority 1: always-visible three-trace strip (Panel A raw IMU, Panel B NPU output).
+    // Priority 1: always-visible three-trace strip (Panel A raw IMU, Panel B precomputed model output).
     // Redrawn once per new 10 Hz telemetry sample instead of every animation frame.
     const traceIdx = Math.floor(this.currentIndex);
     const traceKey = this.traceStripKey(traceIdx);
     if (traceKey !== this.lastTraceKey) {
       this.lastTraceKey = traceKey;
       this.drawImuTrace(traceIdx);
-      this.drawNpuTrace(traceIdx);
+      this.drawNpuOutputTrace(traceIdx);
     }
     if (this.drawerOpen) {
       this.drawImuWaveform(i0);
@@ -1121,9 +1163,9 @@ class TrueTrackCockpit {
     }
   }
 
-  /* Renders the mathematically rigorous EKF error ellipse on the MapLibre map */
-  renderEkfEllipse(centerLngLat, semiAlongM, semiCrossM, headingDeg) {
-    const src = this.map ? this.map.getSource('ekf-ellipse-source') : null;
+  /* Renders the precomputed synthetic covariance proxy on the MapLibre map */
+  renderCovarianceEllipse(centerLngLat, semiAlongM, semiCrossM, headingDeg) {
+    const src = this.map ? this.map.getSource('covariance-ellipse-source') : null;
     if (!src) return;
 
     const mToLat = 1.0 / 110600.0;
@@ -1462,17 +1504,19 @@ class TrueTrackCockpit {
     ctx.stroke();
   }
 
-  /* 5-Stage Interactive Pipeline Real-Time Highlighting */
+  /* 6-Stage Interactive Pipeline Real-Time Highlighting */
   updatePipelineNodes(idx, isBlackout, t) {
     const nodeImu = document.getElementById('pipe-node-imu');
+    const nodeLean = document.getElementById('pipe-node-lean');
     const nodeCnn = document.getElementById('pipe-node-cnn');
-    const nodeEkf = document.getElementById('pipe-node-ekf');
+    const nodeCovariance = document.getElementById('pipe-node-covariance');
     const nodeOsm = document.getElementById('pipe-node-osm');
     const nodeBlend = document.getElementById('pipe-node-blend');
 
     if (nodeImu) nodeImu.classList.toggle('active', this.isPlaying);
+    if (nodeLean) nodeLean.classList.toggle('active', this.isPlaying && this.toggleLean);
     if (nodeCnn) nodeCnn.classList.toggle('active', this.isPlaying && this.toggleNeural);
-    if (nodeEkf) nodeEkf.classList.toggle('active', this.isPlaying);
+    if (nodeCovariance) nodeCovariance.classList.toggle('active', this.isPlaying);
     if (nodeOsm) nodeOsm.classList.toggle('active', isBlackout && this.toggleMap);
     
     // Blend node is active during the 3s exit reconcile window (t in [85.0, 88.0])
@@ -1482,15 +1526,13 @@ class TrueTrackCockpit {
 
   /* ========================================================================
      9c. Priority 1 - Three-Trace Live Cockpit Strip
-     Panel A = raw 3-channel IMU input (chaotic)  |  Panel B = NPU output (smooth)
+     Panel A = raw 3-channel IMU input (chaotic)  |  Panel B = precomputed model output (smooth)
      Both panels are drawn on the drift chart's time domain (0 -> 130 s), use the
      same 38 px / 64 px insets, the same 15 s tick grid and the same live needle.
      ======================================================================== */
 
-  /* Raw IMU channel table. Ranges are nominal display scales chosen from the
-     recorded telemetry (ax/ay p95 ~= 3.5 m/s^2, gz p95 ~= 0.066 rad/s).
-     vibAmp is the injected 29.9 Hz engine-vibration fault amplitude and matches
-     the 3.5 m/s^2 previously hard-coded for ay in the drawer trace. */
+  /* Raw IMU channels in the precomputed 10 Hz replay. The displayed oscillation
+     is deliberately below its 5 Hz Nyquist limit and is illustrative only. */
   imuChannelTable() {
     return [
       { key: 'raw_imu_ax', label: 'ax', color: '#8b94a2', range: 5.0, decimals: 2, vibAmp: 3.5 },
@@ -1503,7 +1545,7 @@ class TrueTrackCockpit {
   imuSample(d, ch) {
     let val = (d && typeof d[ch.key] === 'number' && isFinite(d[ch.key])) ? d[ch.key] : 0.0;
     if (this.highVibrationInjected) {
-      val += ch.vibAmp * Math.sin(2 * Math.PI * 29.93 * d.t);
+      val += ch.vibAmp * Math.sin(2 * Math.PI * 4.0 * d.t);
     }
     return val;
   }
@@ -1511,7 +1553,7 @@ class TrueTrackCockpit {
   /* Dirty-check key: the strip only needs one redraw per new 10 Hz sample,
      not one per 60 FPS animation frame. */
   traceStripKey(idx) {
-    return idx * 2 + (this.highVibrationInjected ? 1 : 0);
+    return idx * 16 + this.decimationFactor * 2 + (this.highVibrationInjected ? 1 : 0);
   }
 
   /* Shared strip geometry: identical insets and time domain to the drift chart,
@@ -1636,7 +1678,7 @@ class TrueTrackCockpit {
       ctx.strokeStyle = ch.color;
       ctx.lineWidth = 1;
       let last = 0.0;
-      for (let i = 0; i <= currentIdx; i++) {
+      for (let i = 0; i <= currentIdx; i += this.decimationFactor) {
         const d = this.telemetry[i];
         if (!d) break;
         const val = this.imuSample(d, ch);
@@ -1644,6 +1686,13 @@ class TrueTrackCockpit {
         const y = Math.max(yMin, Math.min(yMax, mid - (val / ch.range) * half));
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
+        last = val;
+      }
+      if (currentIdx % this.decimationFactor !== 0 && this.telemetry[currentIdx]) {
+        const val = this.imuSample(this.telemetry[currentIdx], ch);
+        const x = geo.getXForIndex(currentIdx);
+        const y = Math.max(yMin, Math.min(yMax, mid - (val / ch.range) * half));
+        ctx.lineTo(x, y);
         last = val;
       }
       ctx.stroke();
@@ -1664,8 +1713,8 @@ class TrueTrackCockpit {
       ctx.fillText(it.text, labelX, it.ly);
     });
   }
-  /* Panel B: always-visible NPU output trace (speed lane + yaw-rate lane) */
-  drawNpuTrace(currentIdx) {
+  /* Panel B: always-visible precomputed model output trace (speed and yaw-rate lanes) */
+  drawNpuOutputTrace(currentIdx) {
     if (!this.ctxNpuTrace || !this.canvasNpuTrace) return;
     const ctx = this.ctxNpuTrace;
     const w = this.canvasNpuTrace.width;
@@ -1678,7 +1727,7 @@ class TrueTrackCockpit {
 
     this.drawTraceTimeline(ctx, geo, h, currentIdx);
 
-    // Lane scales taken from the recorded telemetry (speed 1.6 -> 45.8 km/h, yaw -2.7 -> 1.8 deg/s)
+    // Visual lane scales for the checked-in synthetic replay; these are not device limits.
     const SPEED_MAX = 50.0;
     const YAW_MAX = 3.0;
     const laneGap = 5;
@@ -1708,15 +1757,22 @@ class TrueTrackCockpit {
     ctx.strokeStyle = '#38bdf8';
     ctx.lineWidth = 1.4;
     let lastSpeed = 0.0;
-    for (let i = 0; i <= currentIdx; i++) {
+    for (let i = 0; i <= currentIdx; i += this.decimationFactor) {
       const d = this.telemetry[i];
       if (!d) break;
-      const spd = (typeof d.pred_speed_kmh === 'number' && isFinite(d.pred_speed_kmh)) ? d.pred_speed_kmh : 0.0;
+      const baseSpeed = (typeof d.pred_speed_kmh === 'number' && isFinite(d.pred_speed_kmh)) ? d.pred_speed_kmh : 0.0;
+      const spd = baseSpeed + this.resolutionNoise(i, 0.55, 0.7);
       const x = geo.getXForIndex(i);
       const y = Math.max(geo.padTop, Math.min(speedBase, speedBase - spd * speedScale));
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
       lastSpeed = spd;
+    }
+    if (currentIdx % this.decimationFactor !== 0 && this.telemetry[currentIdx]) {
+      const d = this.telemetry[currentIdx];
+      const baseSpeed = (typeof d.pred_speed_kmh === 'number' && isFinite(d.pred_speed_kmh)) ? d.pred_speed_kmh : 0.0;
+      lastSpeed = baseSpeed + this.resolutionNoise(currentIdx, 0.55, 0.7);
+      ctx.lineTo(geo.getXForIndex(currentIdx), Math.max(geo.padTop, Math.min(speedBase, speedBase - lastSpeed * speedScale)));
     }
     ctx.stroke();
     labels.push({
@@ -1730,15 +1786,22 @@ class TrueTrackCockpit {
     ctx.strokeStyle = '#10b981';
     ctx.lineWidth = 1.4;
     let lastYaw = 0.0;
-    for (let i = 0; i <= currentIdx; i++) {
+    for (let i = 0; i <= currentIdx; i += this.decimationFactor) {
       const d = this.telemetry[i];
       if (!d) break;
-      const yaw = (typeof d.pred_yaw_deg_s === 'number' && isFinite(d.pred_yaw_deg_s)) ? d.pred_yaw_deg_s : 0.0;
+      const baseYaw = (typeof d.pred_yaw_deg_s === 'number' && isFinite(d.pred_yaw_deg_s)) ? d.pred_yaw_deg_s : 0.0;
+      const yaw = baseYaw + this.resolutionNoise(i, 0.07, 1.9);
       const x = geo.getXForIndex(i);
       const y = Math.max(yawTop, Math.min(yawBottom, yawMid - yaw * yawScale));
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
       lastYaw = yaw;
+    }
+    if (currentIdx % this.decimationFactor !== 0 && this.telemetry[currentIdx]) {
+      const d = this.telemetry[currentIdx];
+      const baseYaw = (typeof d.pred_yaw_deg_s === 'number' && isFinite(d.pred_yaw_deg_s)) ? d.pred_yaw_deg_s : 0.0;
+      lastYaw = baseYaw + this.resolutionNoise(currentIdx, 0.07, 1.9);
+      ctx.lineTo(geo.getXForIndex(currentIdx), Math.max(yawTop, Math.min(yawBottom, yawMid - lastYaw * yawScale)));
     }
     ctx.stroke();
     labels.push({
@@ -1755,6 +1818,14 @@ class TrueTrackCockpit {
       ctx.fillStyle = it.color;
       ctx.fillText(it.text, labelX, it.ly);
     });
+  }
+
+  /* Deterministic display-only noise proxy; this does not re-run the model. */
+  resolutionNoise(sampleIndex, amplitude, phase) {
+    const severity = Math.max(0, this.decimationFactor - 1);
+    return severity * amplitude * (
+      Math.sin(sampleIndex * 1.73 + phase) + 0.5 * Math.sin(sampleIndex * 0.61 + phase * 2)
+    );
   }
 
   /* Drawer diagnostics: rolling 80-sample trace of all three raw IMU channels
@@ -1807,21 +1878,24 @@ class TrueTrackCockpit {
     ctx.clearRect(0, 0, w, h);
 
     const mags = this.fftData.magnitudes;
+    const freqs = Array.isArray(this.fftData.freqs) ? this.fftData.freqs : [];
     const n = Math.min(mags.length, 60);
-    const barW = (w / n) - 1;
+    if (!n) return;
+    const maxFreq = 25.0;
+    const barW = Math.max(1, (w / n) - 1);
 
     for (let i = 0; i < n; i++) {
-      const freq = (i / n) * 50;
-      const x = (i / n) * w;
-      const barH = mags[i] * (h - 14);
+      // Spread the displayed bins over the full stored spectrum, not just its first 60 bins.
+      const sourceIndex = n === 1 ? 0 : Math.round(i * (mags.length - 1) / (n - 1));
+      const freq = Number.isFinite(freqs[sourceIndex])
+        ? freqs[sourceIndex]
+        : sourceIndex / Math.max(1, mags.length - 1) * maxFreq;
+      const x = Math.min(w - barW, Math.max(0, (freq / maxFreq) * w));
+      const magnitude = Number.isFinite(mags[sourceIndex]) ? mags[sourceIndex] : 0;
+      const barH = magnitude * (h - 14);
       const y = h - barH;
 
-      // Highlight 21.6 Hz (idle) and 29.9 Hz (cruise) engine harmonics from Chennai drive logs
-      if (Math.abs(freq - 29.93) < 2.0 || Math.abs(freq - 21.57) < 1.5) {
-        ctx.fillStyle = '#d97706';
-      } else {
-        ctx.fillStyle = '#232832';
-      }
+      ctx.fillStyle = '#334155';
       ctx.fillRect(x, y, barW, barH);
     }
   }
@@ -1833,8 +1907,12 @@ class TrueTrackCockpit {
     this.isDemoMode = true;
     this.demoStartTime = performance.now();
     this.currentIndex = 0;
-    this.playbackSpeed = 1.0;
+    this.setPlaybackSpeed(2.0, 2.0);
     this.isPlaying = true;
+    this.demoHasCorneringData = this.telemetry.some((frame) =>
+      frame.t >= 64 && frame.t <= 78 &&
+      typeof frame.lean_deg === 'number' && isFinite(frame.lean_deg) && Math.abs(frame.lean_deg) > 4.0
+    );
 
     const subtitleBar = document.getElementById('demo-subtitle-bar');
     if (subtitleBar) subtitleBar.style.display = 'flex';
@@ -1844,26 +1922,48 @@ class TrueTrackCockpit {
     const elapsed = (now - this.demoStartTime) / 1000;
     const stepElem = document.getElementById('demo-step');
     const textElem = document.getElementById('demo-text');
+    const traceStrip = document.getElementById('trace-strip');
+    const leanToggle = document.getElementById('lbl-toggle-lean');
+    let step;
+    let totalSteps = this.demoHasCorneringData ? 6 : 5;
+    let caption;
+    let highlight = null;
 
     if (elapsed < 8) {
-      if (stepElem) stepElem.textContent = '1/4';
-      if (textElem) textElem.textContent = 'Phase 1: Open sky corridor. Both systems track ground truth with nominal GPS lock.';
-    } else if (elapsed < 24) {
-      if (stepElem) stepElem.textContent = '2/4';
-      if (textElem) textElem.textContent = 'Phase 2: Mindspace Underpass entered. GPS lost. Legacy double-integration diverges to 114m.';
-      this.toggleDrawer(true); // Open drawer automatically
-    } else if (elapsed < 42) {
-      if (stepElem) stepElem.textContent = '3/4';
-      if (textElem) textElem.textContent = 'Phase 3: TrueTrack NPU velocity regression + road manifold keeps drift strictly under 0.95m.';
+      step = 1;
+      caption = 'Open sky corridor: both systems begin with nominal GPS lock.';
+    } else if (elapsed < 15) {
+      step = 2;
+      caption = 'Watch the raw IMU chaos become a smooth neural velocity estimate.';
+      highlight = 'trace';
+    } else if (elapsed < 32) {
+      step = 3;
+      caption = 'Approaching the underpass: GPS loss begins at 40 s, then legacy double-integration drifts away.';
+    } else if (this.demoHasCorneringData && elapsed < 39) {
+      step = 4;
+      caption = 'Cornering segment: the synthetic lean-de-roll ablation changes the modeled lateral error.';
+      highlight = 'lean';
+    } else if (elapsed < 42.5) {
+      step = this.demoHasCorneringData ? 5 : 4;
+      caption = 'Neural velocity and the road manifold keep the trajectory stable through the blackout.';
     } else if (elapsed < 58) {
-      if (stepElem) stepElem.textContent = '4/4';
-      if (textElem) textElem.textContent = 'Phase 4: GPS re-lock. Sigmoid window smoothly reconciles position without a 114m teleport snap.';
+      step = this.demoHasCorneringData ? 6 : 5;
+      caption = 'GPS reacquisition: the exit blend restores position without a hard snap.';
     } else {
       this.isDemoMode = false;
       const subtitleBar = document.getElementById('demo-subtitle-bar');
       if (subtitleBar) subtitleBar.style.display = 'none';
       this.toggleDrawer(false);
+      this.setPlaybackSpeed(1.0, 1.0);
+      if (traceStrip) traceStrip.classList.remove('demo-feature-focus');
+      if (leanToggle) leanToggle.classList.remove('demo-feature-focus');
+      return;
     }
+
+    if (stepElem) stepElem.textContent = `${step}/${totalSteps}`;
+    if (textElem) textElem.textContent = caption;
+    if (traceStrip) traceStrip.classList.toggle('demo-feature-focus', highlight === 'trace');
+    if (leanToggle) leanToggle.classList.toggle('demo-feature-focus', highlight === 'lean');
   }
 }
 

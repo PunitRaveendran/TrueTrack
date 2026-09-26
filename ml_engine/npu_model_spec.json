@@ -3,10 +3,13 @@
   "input_tensor": "[Batch, 6, 50] (Z-score normalized ax, ay, az, gx, gy, gz at 50Hz)",
   "output_tensor": "[Batch, 2] (forward_velocity_m_s, yaw_rate_rad_s)",
   "parameters": 26114,
-  "validation_mse": 0.0536,
+  "random_window_validation_mse": 0.0536,
+  "validation_scope": "Pre-existing artifact: random split over overlapping windows from one synthetic drive; not an independent validation",
+  "training_data_scope": "One synthetic route only; no real phone captures or cross-route validation",
+  "input_preprocessing": "Raw uncorrected IMU channels; deployment must use matching normalization and preprocessing",
+  "artifact_status": "Existing weights were not regenerated with the corrected chronological split",
   "onnx_size_kb": 103.69,
   "torchscript_size_kb": 132.78,
-  "target_runtime": "INT8 Quantized via Qualcomm QNN / Snapdragon Hexagon NPU",
-  "estimated_npu_latency_ms": 1.4,
-  "first_order_engine_vibration_damping_db": -24.5
+  "runtime_status": "ONNX Runtime Android; NNAPI requested when available, selected execution provider unverified",
+  "device_latency_ms": null
 }

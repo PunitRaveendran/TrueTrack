@@ -89,11 +89,24 @@ class IMUWindowDataset(Dataset):
         return torch.tensor(self.X[idx]), torch.tensor(self.y[idx])
 
 def train_and_export():
+    seed = 42
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
     csv_path = os.path.join('ml_engine', 'synthetic_telemetry_50hz.csv')
     df = pd.read_csv(csv_path)
-    
-    # Fit normalization statistics
-    raw_feats = df[['imu_ax', 'imu_ay', 'imu_az', 'imu_gx', 'imu_gy', 'imu_gz']].values
+
+    # Use a chronological split and leave a full window-sized gap so no
+    # overlapping sample window can occur on both sides of validation.
+    split_idx = int(0.8 * len(df))
+    window_size = 50
+    train_df = df.iloc[:split_idx]
+    val_df = df.iloc[min(len(df), split_idx + window_size):]
+    if len(train_df) <= window_size or len(val_df) <= window_size:
+        raise ValueError("Dataset is too short for non-overlapping chronological train/validation windows")
+
+    # Fit normalization only on training rows; validation rows never affect input scaling.
+    raw_feats = train_df[['imu_ax', 'imu_ay', 'imu_az', 'imu_gx', 'imu_gy', 'imu_gz']].values
     means = raw_feats.mean(axis=0).tolist()
     stds = (raw_feats.std(axis=0) + 1e-6).tolist()
     
@@ -103,10 +116,10 @@ def train_and_export():
         json.dump(stats_dict, f, indent=2)
     print(f"Saved per-channel normalization stats to {stats_path}")
     
-    dataset = IMUWindowDataset(df, window_size=50, stats=(np.array(means), np.array(stds)))
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_set, val_set = torch.utils.data.random_split(dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
+    train_set = IMUWindowDataset(train_df, window_size=window_size, stats=(np.array(means), np.array(stds)))
+    val_set = IMUWindowDataset(val_df, window_size=window_size, stats=(np.array(means), np.array(stds)))
+    train_size = len(train_set)
+    val_size = len(val_set)
     
     train_loader = DataLoader(train_set, batch_size=32, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=32, shuffle=False)
@@ -117,7 +130,7 @@ def train_and_export():
     optimizer = optim.AdamW(model.parameters(), lr=0.002, weight_decay=1e-3)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
     
-    print(f"Training Normalized TrueTrack 6-Axis 1D-CNN on {device} (20 epochs)...")
+    print(f"Training Normalized TrueTrack 6-Axis 1D-CNN on {device} (20 epochs; chronological validation block)...")
     model.train()
     best_val_loss = float('inf')
     
@@ -151,12 +164,12 @@ def train_and_export():
             torch.save(model.state_dict(), os.path.join('ml_engine', 'truetrack_1dcnn.pth'))
             
         if epoch % 5 == 0 or epoch == 1:
-            print(f"Epoch {epoch:02d}/20 - Train MSE: {train_mse:.4f}, Val MSE: {val_mse:.4f} (Best: {best_val_loss:.4f})")
+            print(f"Epoch {epoch:02d}/20 - Train MSE: {train_mse:.4f}, Later-block MSE: {val_mse:.4f} (Best: {best_val_loss:.4f})")
 
     # Load best weights
     model.load_state_dict(torch.load(os.path.join('ml_engine', 'truetrack_1dcnn.pth'), map_location=device))
     model.eval()
-    print(f"Loaded best model with Val MSE: {best_val_loss:.4f}")
+    print(f"Loaded best model with later-block MSE: {best_val_loss:.4f}")
 
     # Export ONNX (Input: 1, 6, 50)
     dummy_input = torch.randn(1, 6, 50).to(device)
@@ -186,12 +199,14 @@ def train_and_export():
         "input_tensor": "[Batch, 6, 50] (Z-score normalized ax, ay, az, gx, gy, gz at 50Hz)",
         "output_tensor": "[Batch, 2] (forward_velocity_m_s, yaw_rate_rad_s)",
         "parameters": sum(p.numel() for p in model.parameters()),
-        "validation_mse": round(best_val_loss, 4),
+        "chronological_validation_mse": round(best_val_loss, 4),
+        "validation_scope": "Later time block from the same synthetic drive; not an independent route or real-world evaluation",
+        "training_data_scope": "One synthetic route only; no real phone captures or cross-route validation",
+        "input_preprocessing": "Raw uncorrected IMU channels; deployment must use matching normalization and preprocessing",
         "onnx_size_kb": round(onnx_size_kb, 2),
         "torchscript_size_kb": round(torchscript_size_kb, 2),
-        "target_runtime": "INT8 Quantized via Qualcomm QNN / Snapdragon Hexagon NPU",
-        "estimated_npu_latency_ms": 1.4,
-        "first_order_engine_vibration_damping_db": -24.5
+        "runtime_status": "ONNX Runtime Android; NNAPI requested when available, selected execution provider unverified",
+        "device_latency_ms": None
     }
     with open(os.path.join('ml_engine', 'npu_model_spec.json'), 'w') as f:
         json.dump(npu_spec, f, indent=2)

@@ -12,10 +12,10 @@ import java.util.concurrent.CopyOnWriteArraySet
  * TrueTrack - Telemetry Stream Server (Green Light Bridge)
  *
  * Lightweight local WebSocket server running on the iQOO phone (default port 8765).
- * Streams live 50Hz sensor metrics, NPU inferences, and EKF states directly to the
- * laptop flight recorder cockpit for dual-screen jury demonstrations.
+ * Streams live sensor/model telemetry to the laptop cockpit. The activity currently
+ * broadcasts at the ONNX inference cadence (about 10 Hz), not at the 50 Hz sensor rate.
  */
-class TelemetryStreamServer(port: Int = 8765) : WebSocketServer(InetSocketAddress(port)) {
+class TelemetryStreamServer(port: Int = 8765) : WebSocketServer(InetSocketAddress("127.0.0.1", port)) {
 
     private val connectedClients = CopyOnWriteArraySet<WebSocket>()
 
@@ -34,7 +34,7 @@ class TelemetryStreamServer(port: Int = 8765) : WebSocketServer(InetSocketAddres
     }
 
     override fun onMessage(conn: WebSocket?, message: String?) {
-        // Can receive control commands from laptop cockpit (e.g. remote Kill GPS)
+        // The phone bridge is telemetry-only; incoming commands are logged, not executed.
         try {
             message?.let {
                 val json = JSONObject(it)
@@ -56,7 +56,7 @@ class TelemetryStreamServer(port: Int = 8765) : WebSocketServer(InetSocketAddres
     }
 
     /**
-     * Broadcast live 50 Hz frame to all connected laptop displays.
+     * Broadcast one telemetry frame at the caller's inference cadence (about 10 Hz).
      */
     fun broadcastTelemetry(
         timestampMs: Long,
@@ -64,12 +64,13 @@ class TelemetryStreamServer(port: Int = 8765) : WebSocketServer(InetSocketAddres
         yawRateDeg: Float,
         leanDeg: Float,
         isBlackout: Boolean,
-        npuLatencyMs: Float,
+        inferenceLatencyMs: Float,
         ax: Float,
         ayDerolled: Float,
         az: Float,
-        lat: Double = 17.4435,
-        lon: Double = 78.3772
+        lat: Double,
+        lon: Double,
+        headingDeg: Float
     ) {
         if (connectedClients.isEmpty()) return
 
@@ -79,12 +80,13 @@ class TelemetryStreamServer(port: Int = 8765) : WebSocketServer(InetSocketAddres
             put("yaw", yawRateDeg)
             put("lean", leanDeg)
             put("blackout", isBlackout)
-            put("latency", npuLatencyMs)
+            put("latency", inferenceLatencyMs)
             put("ax", ax)
             put("ay", ayDerolled)
             put("az", az)
             put("lat", lat)
             put("lon", lon)
+            put("heading", headingDeg)
         }
 
         val payload = json.toString()

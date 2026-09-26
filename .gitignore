@@ -58,11 +58,18 @@ local.properties
 # Local nested clone of this repository (never commit)
 TrueTrack/
 
-# Keep the navigation foreground service visible to Git
-!android_app/app/src/main/java/com/truetrack/
-!android_app/app/src/main/java/com/truetrack/navigation/
-!android_app/app/src/main/java/com/truetrack/navigation/NavigationForegroundService.kt
-
-
 .chrome_tmp/
 .preview_cockpit.png
+
+# ---------------------------------------------------------------------------
+# The generic `lib/` rule above is intended for build output, but it also
+# matches web_app/lib/, where the pinned MapLibre runtime and its license live.
+# With it ignored, a fresh clone has no web_app/lib/maplibre-gl.js, the
+# <script>/<link> tags in web_app/index.html 404, and the cockpit shows a
+# blank map with no telemetry. These negations keep the vendored engine
+# tracked (last matching rule wins, so these must stay after `lib/`).
+# ---------------------------------------------------------------------------
+!web_app/lib/
+!web_app/lib/maplibre-gl.js
+!web_app/lib/maplibre-gl.css
+!web_app/lib/LICENSE.txt

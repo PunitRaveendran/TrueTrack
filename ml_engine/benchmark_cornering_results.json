@@ -1,5 +1,9 @@
 {
   "scenario": "curved_underpass_ramp",
+  "evaluation_type": "unreproducible synthetic cornering artifact",
+  "independent_validation": false,
+  "ground_truth_assistance": "Artifact has no corresponding generator script in the repository; methodology and results cannot be independently reproduced.",
+  "performance_claims_supported": false,
   "blackout_duration_sec": 45.0,
   "sampling_frequency_hz": 50,
   "max_vehicle_lean_deg": 21.0,

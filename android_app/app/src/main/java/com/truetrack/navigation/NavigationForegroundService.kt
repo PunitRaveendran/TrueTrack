@@ -30,7 +30,7 @@ class NavigationForegroundService : android.app.Service() {
     private fun buildNotification(): android.app.Notification = androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
         .setSmallIcon(android.R.drawable.ic_menu_mylocation)
         .setContentTitle(getString(R.string.app_name))
-        .setContentText("Navigation sensors active")
+        .setContentText("Navigation session active")
         .setOngoing(true)
         .setCategory(androidx.core.app.NotificationCompat.CATEGORY_SERVICE)
         .build()

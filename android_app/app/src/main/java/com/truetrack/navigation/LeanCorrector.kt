@@ -7,7 +7,7 @@ import kotlin.math.*
  *
  * Implements a high-rate complementary filter estimating vehicle roll angle phi(t)
  * calibrated for Android device coordinate frames (X: Lateral, Y: Longitudinal, Z: Vertical/Normal).
- * Performs R_x(-phi) de-rolling to isolate true dynamic acceleration from gravity.
+ * Rotates the lateral/vertical X-Z components about the forward Y axis to de-roll acceleration.
  */
 class LeanCorrector(
     private val sampleRate: Float = 50.0f,
@@ -64,13 +64,13 @@ class LeanCorrector(
     }
 
     /**
-     * Apply R_x(-phi) rotation around longitudinal axis.
+     * Apply the inverse rotation around the longitudinal Y axis.
      * De-rolls lateral (ax) and vertical (az) accelerations so that gravity
      * does not contaminate lateral vehicle dynamics.
      *
      * @return FloatArray of size 3: [ax_derolled, ay, az_derolled]
      */
-    fun derollAccelerations(ax: Float, ay: Float, az: Float, phiRad: Float = currentPhiRad): FloatArray {
+    fun derollAccelerations(ax: Float, ay: Float, az: Float, out: FloatArray, phiRad: Float = currentPhiRad) {
         val cosPhi = cos(phiRad)
         val sinPhi = sin(phiRad)
 
@@ -78,7 +78,9 @@ class LeanCorrector(
         val axDerolled = ax * cosPhi - az * sinPhi
         val azDerolled = ax * sinPhi + az * cosPhi
 
-        return floatArrayOf(axDerolled, ay, azDerolled)
+        out[0] = axDerolled
+        out[1] = ay
+        out[2] = azDerolled
     }
 
     /**

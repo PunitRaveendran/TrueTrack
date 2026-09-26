@@ -1,6 +1,6 @@
-# TrueTrack Design System Specification (DESIGN.md) - Round 3 High-Fidelity
+# TrueTrack Web Cockpit Visual Specification
 
-**Aesthetic Direction**: *Precision Flight Recorder / Survey Instrument*. Quiet, calm, mathematically rigorous, Linear/Apple Maps dark mode aesthetic. Clean visual depth, restrained single-accent hierarchy, zero sci-fi tropes or neon glows.
+**Aesthetic Direction**: *Precision Flight Recorder / Survey Instrument*. Quiet, calm, evidence-conscious dark UI. Clean visual depth, restrained accents, and no visual treatment that implies a simulated estimate is a measured result.
 
 ---
 
@@ -48,7 +48,7 @@ Strict visual layer stacking so TrueTrack ALWAYS renders with dominance over leg
 | **Z 450** | Dim Full Corridor Route | 2px dim line (`#334155`) with 4px dark casing (`#07090d`) |
 | **Z 500** | Legacy Traveled Path | 2.5px red line (`#ef4444`) with 5px dark casing (`#07090d`) |
 | **Z 600** | TrueTrack Traveled Path | 3.5px bright blue line (`#38bdf8`) with 5.5px dark casing (`#07090d`) |
-| **Z 620** | EKF Covariance Ellipse & Tethers | Translucent blue ellipse (`rgba(56, 189, 248, 0.15)`), thin tether lines |
+| **Z 620** | Precomputed synthetic covariance proxy & tethers | Translucent blue ellipse (`rgba(56, 189, 248, 0.15)`), thin tether lines; not a live EKF covariance |
 | **Z 700** | Legacy Marker Puck | 28px hollow/outlined red ring (`border: 2.5px solid #ef4444; background: transparent;`) |
 | **Z 800** | TrueTrack Marker Puck | **40px directional marker**: solid blue fill (`#2563eb`), 2px crisp white ring, soft 2.5s outer pulse ring |
 
@@ -81,24 +81,24 @@ Strict visual layer stacking so TrueTrack ALWAYS renders with dominance over leg
 
 ---
 
-## 6. Three-Trace Live Cockpit Strip (Priority 1, Spec §6)
+## 6. Three-Trace Synthetic Replay Strip
 
-The left column is a vertical stack: the map puck (Panel C, Z 400-800 above) plus two **always-visible**
-strip panels that are deliberately *not* gated behind the diagnostics drawer, so all three panels are on
-screen simultaneously during live playback.
+The left column shows the map puck (Panel C, Z 400-800 above) and two **always-visible** strip panels.
+In browser playback, the traces come from precomputed synthetic telemetry sampled at 10 Hz. They are not
+live IMU readings or live model inference. The optional Android link provides separate phone telemetry.
 
 | Panel | Signal | Stroke | Nominal scale | Character |
 | :--- | :--- | :--- | :--- | :--- |
-| **A - Raw IMU input** | `raw_imu_ax` | `#8b94a2` slate, 1.0px | ±5 m/s² | Chaotic, vibration-visible |
-| | `raw_imu_ay` | `#e2e8f0` neutral white, 1.0px | ±5 m/s² | Chaotic |
-| | `raw_imu_gz` | `#d97706` amber, 1.0px | ±0.15 rad/s | Chaotic (engine harmonics) |
-| **B - NPU output** | `pred_speed_kmh` | `#38bdf8` TrueTrack blue, 1.4px | 0-50 km/h lane | Smooth regression |
-| | `pred_yaw_deg_s` | `#10b981` success green, 1.4px | ±3 °/s lane | Smooth regression |
+| **A - Raw IMU input** | `raw_imu_ax` | `#8b94a2` slate, 1.0px | ±5 m/s² | Synthetic precomputed sample |
+| | `raw_imu_ay` | `#e2e8f0` neutral white, 1.0px | ±5 m/s² | Synthetic precomputed sample |
+| | `raw_imu_gz` | `#d97706` amber, 1.0px | ±0.15 rad/s | Synthetic precomputed sample |
+| **B - Neural output** | `pred_speed_kmh` | `#38bdf8` TrueTrack blue, 1.4px | 0-50 km/h lane | Precomputed model output |
+| | `pred_yaw_deg_s` | `#10b981` success green, 1.4px | ±3 °/s lane | Precomputed model output |
 
 - **Shared time axis:** both panels reuse the drift chart's insets (38px left / 64px right), its
   0-130 s domain, its 15 s tick grid and its live needle, so Panels A, B and C read as one synchronized instrument.
-- **Scale provenance:** nominal ranges are derived from the recorded telemetry (ax/ay `|p95| ≈ 3.5 m/s²`,
-  gz `|p95| ≈ 0.066 rad/s`, speed `1.6-45.8 km/h`, yaw `-2.7 → 1.8 °/s`) so no trace sits flat or pinned to the rails.
+- **Scale provenance:** ranges are visual scales for the checked-in synthetic fixture; they are not sensor specifications or validation statistics.
 - **Colour discipline:** the reserved semantics stay intact (blue = TrueTrack result, red = legacy failure,
   amber = underpass/vibration), so accent blue and success green are used only on the *neural output* panel.
-- **Redraw policy:** one redraw per new 10 Hz telemetry sample (dirty-check key), never per 60 fps frame.
+- **Resolution control:** sample skipping and added output noise are visual-only; they do not re-run the model or change an input sensor rate.
+- **Redraw policy:** the trace strip redraws when its playback index or display controls change.

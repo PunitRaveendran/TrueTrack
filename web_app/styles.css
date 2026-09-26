@@ -316,8 +316,8 @@ html, body {
   height: 100%;
 }
 /* ==========================================================================
-   2b. Three-Trace Live Cockpit Strip (Priority 1: raw IMU vs NPU output)
-   Left column = [ map puck (Panel C) + raw IMU strip (Panel A) + NPU (Panel B) ]
+   2b. Three-Trace Cockpit Strip (raw IMU vs precomputed model output)
+   Left column = [ map puck (Panel C) + raw IMU strip (Panel A) + model output (Panel B) ]
    ========================================================================== */
 .map-column {
   display: flex;
@@ -343,11 +343,16 @@ html, body {
   border-top: 1px solid var(--border-subtle);
 }
 
+.trace-strip.demo-feature-focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .trace-panel {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  padding: 5px 10px 3px 10px;
+  padding: 8px 12px 6px;
 }
 
 .trace-head {
@@ -413,9 +418,9 @@ html, body {
 
 .swatch-ax { background: #8b94a2; }
 .swatch-ay { background: #e2e8f0; }
-.swatch-gz { background: #d97706; }
-.swatch-speed { background: #38bdf8; }
-.swatch-yaw { background: #10b981; }
+.swatch-gz { background: var(--tunnel); }
+.swatch-speed { background: var(--accent); }
+.swatch-yaw { background: var(--success); }
 
 .trace-canvas {
   width: 100%;
@@ -446,6 +451,57 @@ html, body {
   white-space: nowrap;
 }
 
+.trace-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 2px 2px 3px;
+}
+
+.trace-control {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: 10px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.trace-control-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.trace-control-heading output {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.cockpit-range {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.trace-control-caption {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.25;
+}
+
+@media (max-width: 720px) {
+  .trace-controls { grid-template-columns: 1fr; gap: 8px; }
+}
+
 
 
 .map-vignette-overlay {
@@ -463,6 +519,16 @@ html, body {
 .maplibregl-canvas {
   filter: brightness(0.65) invert(1) contrast(1.5) hue-rotate(200deg) saturate(0.08) opacity(0.85);
   transition: filter 0.3s ease;
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgba(8, 11, 17, 0.9) !important;
+  color: #cbd5e1 !important;
+  font-size: 10px !important;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: #38bdf8 !important;
 }
 
 /* Single Subtitle / Context Alert Banner (Max 1 at a time, top center) */
@@ -670,7 +736,7 @@ html, body {
   margin-bottom: 6px;
 }
 
-/* 5-STAGE PIPELINE FLOW INDICATOR */
+/* 6-STAGE PIPELINE FLOW INDICATOR */
 .pipeline-section {
   padding: 8px 14px;
   background: #0f1217;
@@ -874,6 +940,12 @@ html, body {
   font-size: 12px;
   color: var(--text-primary);
   user-select: none;
+}
+
+.ablation-switch-item.demo-feature-focus {
+  outline: 1px solid var(--success);
+  outline-offset: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .switch-toggle {

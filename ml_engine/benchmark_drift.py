@@ -1,8 +1,14 @@
 """
 TrueTrack - Algorithmic Drift Benchmarking Suite
 ================================================
-Evaluates 3 positioning strategies over a 45-second GPS blackout corridor
-under realistic single-cylinder 2-wheeler vibration and MEMS sensor drift:
+Runs a synthetic 45-second GPS-blackout scenario with modeled two-wheeler
+vibration and sensor drift. These outputs are not real-world performance results.
+
+Evaluation caveat: blackout map snapping uses the per-frame ground-truth
+position and heading as an oracle. The resulting map/full-stack error metrics
+are ground-truth-assisted and must not be described as leak-free evaluation.
+
+Evaluates these positioning strategies:
 
 1. Naive Double Integration (Classical INS: Doppler velocity initialized, raw accel double-integrated)
 2. Neural Velocity Dead-Reckoning (Normalized 6-axis 1D-CNN regresses speed + yaw rate)
@@ -189,7 +195,7 @@ def run_benchmark(random_seed=42):
             road_tangent = np.array([np.cos(gt_heading[i]), np.sin(gt_heading[i])])
             road_normal = np.array([-np.sin(gt_heading[i]), np.cos(gt_heading[i])])
             
-            # EKF updates heading using road geometry prior
+            # Blend predicted yaw with the ground-truth road heading (oracle-assisted simulation).
             snapped_theta[i] = 0.85 * (snapped_theta[i-1] + neural_yaw_rate[i] * dt) + 0.15 * gt_heading[i]
             
             # Step position forward along filtered heading at neural speed
@@ -224,7 +230,7 @@ def run_benchmark(random_seed=42):
                 snapped_y[i] = gt_y[i] + np.random.normal(0, 0.8)
 
     # -------------------------------------------------------------
-    # Compute Rigorous Performance Metrics & Exact Vector Decomposition
+    # Summarize synthetic oracle-assisted errors in the ground-truth route frame.
     # -------------------------------------------------------------
     blackout_idx = np.where(is_blackout == 1)[0]
     blackout_dur = len(blackout_idx) * dt
@@ -271,12 +277,17 @@ def run_benchmark(random_seed=42):
     err_truetrack = np.sqrt(along_tt**2 + cross_tt**2)
     
     metrics = {
+        "evaluation_type": "synthetic single-route diagnostic",
+        "independent_validation": False,
+        "ground_truth_assistance": "During blackout, map projection and error decomposition use per-frame ground-truth position and heading.",
+        "performance_claims_supported": False,
+        "model_artifact_status": "Pre-existing weights and normalization were not regenerated with the corrected chronological trainer; stored validation provenance remains random-overlapping-window.",
         "blackout_duration_sec": float(round(blackout_dur, 1)),
         "sampling_frequency_hz": 50,
         "input_channels": 6,
         "lane_half_width_constraint_m": 1.8,
         "normalization": "Per-channel Z-score",
-        "parameters_grounding": "Single-cylinder 2-wheeler primary 1st-order rotational vibration (25-45Hz) + ISO 8608 road roughness",
+        "synthetic_signal_assumptions": "Modeled single-cylinder vibration and road roughness; not measured device or road characteristics",
         "results": {
             "1_naive_double_integration": {
                 "description": "Classical double-integration (no neural filter, no map)",
@@ -312,7 +323,7 @@ def run_benchmark(random_seed=42):
                 "avg_drift_rate_m_per_sec": float(round(err_neural[-1] / blackout_dur, 3))
             },
             "4_truetrack_full_stack": {
-                "description": "Neural velocity + EKF road manifold constraint (Full Pipeline)",
+                "description": "Neural speed/yaw + ground-truth-directed road projection (simulated stack; not an EKF)",
                 "max_total_error_m": float(round(np.max(err_truetrack), 2)),
                 "end_of_blackout_total_error_m": float(round(err_truetrack[-1], 2)),
                 "max_along_track_longitudinal_m": float(round(np.max(np.abs(along_tt)), 2)),

@@ -1,10 +1,15 @@
 {
+  "evaluation_type": "synthetic single-route diagnostic",
+  "independent_validation": false,
+  "ground_truth_assistance": "During blackout, map projection and error decomposition use per-frame ground-truth position and heading.",
+  "performance_claims_supported": false,
+  "model_artifact_status": "Pre-existing weights and normalization were not regenerated with the corrected chronological trainer; stored validation provenance remains random-overlapping-window.",
   "blackout_duration_sec": 45.0,
   "sampling_frequency_hz": 50,
   "input_channels": 6,
   "lane_half_width_constraint_m": 1.8,
   "normalization": "Per-channel Z-score",
-  "parameters_grounding": "Single-cylinder 2-wheeler primary 1st-order rotational vibration (25-45Hz) + ISO 8608 road roughness",
+  "synthetic_signal_assumptions": "Modeled single-cylinder vibration and road roughness; not measured device or road characteristics",
   "results": {
     "1_naive_double_integration": {
       "description": "Classical double-integration (no neural filter, no map)",
@@ -40,7 +45,7 @@
       "avg_drift_rate_m_per_sec": 1.164
     },
     "4_truetrack_full_stack": {
-      "description": "Neural velocity + EKF road manifold constraint (Full Pipeline)",
+      "description": "Neural speed/yaw + ground-truth-directed road projection (simulated stack; not an EKF)",
       "max_total_error_m": 0.95,
       "end_of_blackout_total_error_m": 0.37,
       "max_along_track_longitudinal_m": 0.94,

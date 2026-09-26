@@ -1,64 +1,23 @@
-# TrueTrack — Real-World On-Bike Telemetry Logging Guide
+# Real phone sensor log ingest
 
-To validate TrueTrack against genuine road conditions and defuse the *"is this purely synthetic?"* question from hackathon judges, follow this 5-minute real-world data collection procedure.
+`ml_engine/load_real_imu_data.py` resamples Sensor Logger folders for inspection. It does not train the checked-in model or run the drift benchmark.
 
----
+## Capture and axis notes
 
-## 1. Tooling & Smartphone Setup
+Export `Accelerometer.csv` and `Gyroscope.csv`; `Location.csv` and `Orientation.csv` are optional. The importer expects a `seconds_elapsed` column and `x/y/z` sensor columns. Location data is expected to use `latitude`, `longitude`, and optional `speed` and `accuracy`; orientation data may include `roll` in radians.
 
-Install either of the following free sensor recording apps on your Android test device:
-- **Phyphox** (Recommended — RWTH Aachen University, completely open-source)
-- **Sensor Logger** (Tsz-Ho Kwok, clean CSV export)
+The checked-in model was trained on one synthetic route, not on the real phone logs. The importer keeps the raw device axes and does not estimate a complete phone-to-vehicle rotation. Its optional roll de-roll output assumes the app's declared frame (X=lateral, Y=forward, Z=vertical), so verify mounting and units before using the derived channels as model input.
 
-### Required Sensor Streams:
-1. **Accelerometer** ( calibrated $a_x, a_y, a_z$ in $\text{m/s}^2$)
-2. **Gyroscope** (calibrated $\omega_x, \omega_y, \omega_z$ in $\text{rad/s}$)
-3. **Location / GNSS** (Latitude, Longitude, Speed, Accuracy, $1\text{--}10\text{ Hz}$)
-
-### Sensor Configuration:
-- **Sampling Frequency**: Set to **50 Hz** (or 100 Hz; TrueTrack downsamples to 50 Hz automatically).
-- **Format**: CSV export with microsecond or millisecond timestamps.
-
----
-
-## 2. Mounting & Rig Alignment
-
-1. **Mounting Location**: Secure the smartphone in a standard two-wheeler handlebar phone holder or magnetic tank mount.
-2. **Orientation**: Screen facing the rider, top of phone oriented forward along the vehicle's direction of travel ($+x = \text{forward}, +y = \text{lateral right}, +z = \text{down/gravity}$).
-3. **Firm Attachment**: Ensure the mount does not rattle or pivot loosely — single-cylinder engine vibration (25–45 Hz) should transfer naturally from the chassis into the phone body.
-
----
-
-## 3. Recommended 3-Minute Test Route
-
-1. **Phase 1: Stationary Zero-Velocity Baseline (0 – 10 seconds)**:
-   - Keep the vehicle stationary with the engine idling at ~1500 RPM.
-   - *Purpose*: Captures the pure stationary engine vibration spectrum (25–35 Hz harmonic peak).
-
-2. **Phase 2: Clear-Sky Alignment (10 – 40 seconds)**:
-   - Ride normally in clear open sky (accelerate to 30–45 km/h).
-   - *Purpose*: Solves for the initial Doppler velocity vector and phone-to-vehicle transformation matrix ($R_{\text{phone} \to \text{vehicle}}$).
-
-3. **Phase 3: GPS Blackout Corridor / Curved Turn (40 – 90 seconds)**:
-   - Enter an underpass, flyover shadow, or execute a continuous sweeping turn ($15^\circ\text{--}25^\circ$ lean angle).
-   - *Purpose*: Demonstrates the Lean Angle Estimator $\phi(t)$ and Non-Holonomic Constraint (NHC) drift elimination under genuine pavement potholes and lean angles.
-
-4. **Phase 4: Re-emergence & Lock (90 – 120 seconds)**:
-   - Ride back out into full satellite visibility.
-   - *Purpose*: Validates the 3.0-second Sigmoid reconciliation curve returning smoothly to GPS without teleportation.
-
----
-
-## 4. Ingesting & Running Through TrueTrack
-
-Export the `.csv` file from Phyphox or Sensor Logger to your computer and run:
+## Resample a log
 
 ```bash
-# Ingest and convert raw phone log into TrueTrack 50 Hz format
-python ml_engine/load_real_imu_data.py --input path/to/my_ride_log.csv --output ml_engine/real_ride_telemetry_50hz.csv
-
-# Run the 5-way ablation benchmark on your real recording
-python ml_engine/benchmark_drift.py --telemetry ml_engine/real_ride_telemetry_50hz.csv
+python ml_engine/load_real_imu_data.py --input path/to/SensorLoggerExport --output ml_engine/real_ride_resampled.csv
 ```
 
-The resulting trajectory and error metrics can then be loaded directly into the web cockpit or compared against the synthetic baseline.
+The importer interpolates accelerometer and gyroscope samples onto a 50 Hz time grid. This is resampling; it cannot recover information absent from a lower-rate recording. GNSS is interpolated only across intervals up to 2.5 seconds, with longer outages left as `NaN`.
+
+To label an interval as a simulated blackout and remove GNSS values from that interval, pass `--blackout-start SECONDS` and optionally `--blackout-duration SECONDS`. This is a user-specified mask, not an automatically detected tunnel or proof of a real GNSS outage.
+
+## What the output means
+
+The CSV is synchronized sensor and GNSS input for inspection. `benchmark_drift.py` and the browser benchmark still use synthetic telemetry and ground-truth-assisted map projection; they do not accept this CSV as an evaluation dataset. No real-drive drift score, held-out route result, or lean-correction benefit can be computed from this importer alone.

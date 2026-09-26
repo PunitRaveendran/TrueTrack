@@ -2,8 +2,9 @@
 TrueTrack - Lean Angle Estimator
 =================================
 Estimates continuous two-wheeler roll lean angle phi(t) at 50 Hz using a
-complementary filter that blends high-frequency gyroscope roll integration (imu_gx)
-with low-acceleration gravity vector observations (arctan2(imu_ay, imu_az)).
+complementary filter that blends gyroscope roll integration (imu_gx) with
+low-acceleration gravity observations in the repository's declared phone frame:
+X=lateral, Y=forward, Z=vertical.
 
 Mathematical Formulation:
 -------------------------
@@ -11,7 +12,7 @@ Mathematical Formulation:
    phi_gyro = phi_{t-1} + gx * dt
 
 2. Gravity Vector Observation (Active during low non-gravitational acceleration):
-   phi_accel = arctan2(ay, az)
+   phi_accel = atan2(ax, sqrt(ay^2 + az^2))
 
 3. Adaptive Gating:
    When |norm(a) - g| < accel_thresh, gravity estimate is trusted.
@@ -41,8 +42,8 @@ class LeanEstimator:
         Update the lean angle estimate with a single 6-axis IMU sample.
 
         Args:
-            ax, ay, az: Accelerometer readings in m/s^2 (ax = forward, ay = lateral/right, az = vertical/down)
-            gx, gy, gz: Gyroscope angular velocities in rad/s (gx = roll rate around forward axis)
+            ax, ay, az: Accelerometer readings in m/s^2 (ax = lateral, ay = forward, az = vertical)
+            gx, gy, gz: Gyroscope angular velocities in rad/s (gx is the roll-rate channel used by this project)
 
         Returns:
             float: Estimated roll lean angle phi in radians (positive = right lean, negative = left lean).
@@ -55,8 +56,8 @@ class LeanEstimator:
 
         # 3. Gating check: if acceleration is close to 1g, trust gravity vector
         if abs(accel_mag - self.g) < self.accel_gate:
-            # Gravity vector roll angle
-            phi_meas = np.arctan2(ay, az)
+            # Roll projection uses the lateral X component in this project's frame.
+            phi_meas = np.arctan2(ax, np.sqrt(ay**2 + az**2))
             # Blend prediction and measurement
             self.phi_rad = self.alpha * phi_pred + (1.0 - self.alpha) * phi_meas
         else:

@@ -1,151 +1,64 @@
-# TrueTrack: On-Device Neural-Inertial Navigation for GPS-Denied Urban Corridors
+# TrueTrack: Neural-Inertial Navigation Prototype
 
-**Track:** Open Innovation (Local AI / Snapdragon NPU Focus)  
-**Team:** 3 Members  
-**Target Hardware:** Qualcomm SM8850 (Snapdragon 8 Elite Gen 5) / Snapdragon Mobile Platforms (Hexagon HTP via Qualcomm QNN SDK / libQnnHtp.so)
+> **Status:** This repository contains a prototype and an illustrative simulation. It does not establish real-world blackout accuracy, target-device NPU execution, or product readiness. The benchmark paths use synthetic telemetry and ground-truth assistance as described below.
 
----
+## Problem
 
-## 1. Executive Summary & Problem Statement
-In India's dense metropolitan centers, satellite GPS coverage degrades or drops completely inside road underpasses, multi-level flyovers, tunnels, and dense urban canyons (e.g., Hyderabad Mindspace Underpass, Bangalore Cyber City corridors, Delhi Pragati Maidan tunnel).
+Two-wheeler riders often lose usable GNSS in covered roads and urban canyons. Phone accelerometers and gyroscopes provide motion signals during a gap, but sensor bias, vibration, mounting orientation, and heading drift make standalone inertial navigation difficult. This project explores whether a small learned speed/yaw estimator and map context can make that interval easier to reason about.
 
-Over 15 million gig-economy delivery riders (Swiggy, Zomato, Porter) and two-wheeler commuters navigate exclusively using consumer smartphones mounted on handlebars. Unlike passenger cars, two-wheelers lack OBD-II telemetry, wheel-speed odometry, or factory-installed Inertial Navigation Systems (INS). When satellite line-of-sight is lost:
-1. Standard navigation apps freeze at the tunnel entrance, dead-reckon along an assumed straight line, or wander erratically into adjacent buildings.
-2. Riders miss crucial underground bifurcations or exits, causing 10–20 minute detours, customer penalties, and unsafe sudden stops.
+## What the current prototype implements
 
-**TrueTrack** solves this through an autonomous on-device navigation engine. The moment satellite reception is lost, TrueTrack turns the smartphone's internal MEMS sensors (6-axis accelerometer + gyroscope) into an intelligent inertial navigation system, continuously tracks vehicular position along the road network, and reconciles smoothly when GPS returns—with zero external hardware and zero cloud dependency.
+- A Kotlin Android app samples accelerometer and gyroscope events with a 50 Hz target interval and builds a one-second, six-channel input window.
+- A checked-in FP32 ONNX model estimates forward speed and yaw rate. The app measures elapsed time around `OrtSession.run`; it requests NNAPI where available, but does not verify which execution provider ran the call.
+- Live GPS fixes update the Android position. After blackout, the app waits for three fixes that pass simple position/consistency bounds before accepting GPS again.
+- `LeanCorrector` estimates roll and can de-roll selected acceleration axes. De-roll defaults off because the checked-in model and normalization stats were trained on uncorrected channels. The Android app does not currently fuse an NHC measurement or a live EKF.
+- The Android off-route warning checks against one hardcoded HITEC City centerline. It is not a general routing or multi-corridor map matcher.
+- A foreground notification and heartbeat are present. The service does not own the sensor pipeline; sensor processing remains in `MainActivity`.
+- The WebSocket bridge streams live phone telemetry to loopback at approximately the model inference cadence. It is telemetry-only and can be reached from a laptop with ADB reverse.
+- The browser cockpit replays precomputed synthetic telemetry on local OSM route geometry. Its slider noise and decimation are visual demonstrations, not model re-inference.
 
----
+## Data and evaluation limits
 
-## 2. Core Innovation: Why Local Edge AI is Structurally Essential
-In an underpass or tunnel blackout zone, cellular connectivity drops alongside GPS. A navigation engine cannot query an external cloud API or off-device model in a blackout zone. The intelligence must execute **strictly at the device edge**.
+The repository has three sets of real phone sensor-log CSV captures. The loader can align log streams onto a 50 Hz grid, but the model trainer and checked-in performance outputs do not consume those captures. The model was trained on one synthetic drive. Its stored validation MSE came from a random split of heavily overlapping windows. The trainer now uses a chronological split, a one-second gap, and training-only normalization, but the model, normalization, and ONNX artifacts have not been regenerated with that change.
 
-### The Edge-AI Breakthrough: Neural-Inertial Odometry & Two-Wheeler Dynamics
-Classical strapdown inertial navigation relies on double-integrating accelerometer signals ($s = \iint a \, dt$). On a two-wheeler handlebar mount, this fails:
-* Single-cylinder 4-stroke commuter engines operating between 1500–3000 RPM generate strong primary 1st-order rotational vibrations (crankshaft reciprocating imbalance at $\text{RPM}/60$) in the 20–50 Hz band ($2.0\text{--}4.0\text{ m/s}^2$ amplitude).
-* Road roughness and surface irregularities inject continuous transient shock impulses (modeled via ISO 8608 road profiles).
-* Two-wheelers lean into corners (empirically measured up to **22.1°** in real Chennai flyover logs). Standard car Non-Holonomic Constraints (NHC) assume $a_y \approx 0$, so cornering projects gravity ($g \sin \phi$) into the lateral axis, causing rapid false drift.
-* Double-integrating these raw signals causes positional error to explode quadratically ($t^2$) within seconds.
+The drift benchmark is also synthetic. During blackout, the map/full-stack progression uses the per-frame ground-truth position and heading to project the estimate onto the route. The five-seed script perturbs sensor noise on the same synthetic route and uses the same ground-truth-assisted projection. These results are not leak-free or held-out performance estimates. The cornering-results JSON has no generator script in the repository and cannot be reproduced from current tracked code.
 
-TrueTrack replaces naive double-integration with a **Normalized Neural-Inertial 1D-CNN (Temporal Convolutional Network)** tailored for the **Snapdragon Hexagon NPU**:
-1. **Per-Channel Z-Score Normalization:** Sensor channels differ by orders of magnitude (gravity acceleration mean $\sim 9.8\text{ m/s}^2$ vs. gyro angular rate std $\sim 0.07\text{ rad/s}$). TrueTrack normalizes all 6 input streams, preventing high-amplitude acceleration gradients from drowning out subtle rotational cues. Normalization reduced velocity validation MSE from 0.1389 to 0.0257 (a **57% reduction in velocity RMSE**).
-2. **Deterministic 50 Hz Timebase Alignment & Jitter Correction:** Consumer Android sensors stream asynchronously ($\sim 60.8\text{ Hz}$ on 60 Hz display refresh) with microsecond OS timestamp jitter ($0.05\text{ ms}$ std). TrueTrack applies deterministic 1D interpolation onto a uniform $50.0\text{ Hz}$ grid ($dt = 0.02\text{ s}$), guaranteeing the `[1, 6, 50]` tensor strictly observes a true $1.00\text{ s}$ physical window without temporal compression or dilation.
-3. **Broadband Adaptive Harmonic Rejection (Why 1D-CNN, Not Fixed Filters):** Single-cylinder engine vibration peaks shift dynamically across operating states—from $\sim 15.3\text{--}16.7\text{ Hz}$ chassis subharmonics, to $21.6\text{ Hz}$ at idle, up to $29.9\text{ Hz}$ at cruising speeds ($36\text{ km/h}$). Fixed classical notch filters fail as engine RPM shifts, introducing fatal phase lag into gyro integration. TrueTrack's 1D-CNN temporal receptive field acts as a data-driven adaptive filter across the entire 15–50 Hz operational band (-8.3 dB measured rejection).
-4. **Motorcycle Lean-Angle De-Rolling ($R_x(-\phi)$):** A 50 Hz complementary roll estimator computes dynamic bank angle $\phi(t)$ from gyro integration and gravity vector gating. Accelerations are rotated via $R_x(-\phi)$ before NHC gating, locking lateral drift to **1.80 m** (IRC:86 lane boundary) vs. 5.93 m uncorrected car NHC drift.
-5. **Direct Velocity Vector Regression:** Instead of integrating acceleration twice, the model directly regresses instantaneous forward vehicle speed and yaw rate $(\hat{v}, \hat{\omega})$. This converts quadratic error divergence into a bounded, linear residual problem.
-6. **Ultra-Low Edge Footprint:** The trained model footprint is **103.7 KB** in standard ONNX format (`truetrack_model.onnx`), designed for fast INT8 quantization via Qualcomm QNN tools with an architectural latency budget of **~1.4 ms per inference** on the Hexagon Tensor Processor (well inside the 20 ms / 50 Hz deadline), maintaining a continuous navigation loop with negligible battery draw.
+For those reasons, this submission does not claim measured drift performance, cross-route generalization, real-world lean benefit, or NPU latency. The web UI labels its values as generated scenario outputs.
 
----
+## Architecture
 
-## 3. System Architecture & Fusion Pipeline
-
-```
-  [Phone 6-Axis MEMS IMU] ──► [50 Hz Rolling Buffer (50 samples x 6 channels)]
-                                                 │
-                                                 ▼
-                                [Snapdragon NPU: 1D-CNN INT8]
-                                (Z-Score Norm & Velocity Regression)
-                                                 │
-                                                 ▼ Predicted (v_fwd, yaw_rate)
-  [Compass / Gyro] ─────────────► [Extended Kalman Filter (EKF)] ◄── [GPS Fix (when locked)]
-                                                 │
-                                                 ▼ Unconstrained Coordinates
-                                [Offline OSM Road-Manifold Constraint]
-                                (Heading Alignment & Lateral Bound)
-                                                 │
-                                                 ▼ Constrained Trajectory
-                                [Sigmoid Reconciliation Engine]
-                                (Smooth 3.0s blend on GPS return)
-                                                 │
-                                                 ▼
-                                [Driver Navigation UI & Voice Cues]
+```mermaid
+flowchart LR
+    A[Phone IMU at 50 Hz] --> B[1 s normalized input window]
+    B --> C[ONNX Runtime about every 100 ms]
+    D[GPS fixes] --> E[Position state]
+    C --> E
+    F[Single corridor warning check] --> E
+    E --> G[Android HUD and telemetry bridge]
+    H[Precomputed synthetic scenario] --> I[Browser plots and playback]
+    J[Local corridor GeoJSON] --> I
+    K[Viewed OSM basemap tiles] --> I
 ```
 
-### Key Algorithmic Components:
-1. **Extended Kalman Filter (EKF):** Blends NPU-predicted velocity vectors with high-rate gyroscope integration to track position and heading covariances during clear-sky and blackout conditions.
-2. **Offline Road-Manifold Constraint:** Vehicles cannot drive through tunnel concrete or fly laterally across walls. TrueTrack matches the estimated trajectory onto a locally cached OpenStreetMap vector graph (under 15 MB for an active metropolitan zone), aligning heading to the road geometry and capping cross-track deviation to physical roadway boundaries ($\le 1.8\text{ m}$, representing the standard single-lane half-width for Indian urban carriageways under IRC:86 guidelines).
-3. **Smooth Sigmoid Reconciliation:** When satellite fix re-emerges, naive systems snap the marker with an abrupt, disorienting jump-cut. TrueTrack executes an S-curve blend over a 3.0-second convergence window:
-   $$\alpha(t) = \frac{1}{1 + e^{-k(t - t_0 - \tau/2)}}$$
-   $$P_{\text{display}}(t) = (1 - \alpha(t)) \cdot P_{\text{DR}}(t) + \alpha(t) \cdot P_{\text{GPS}}(t)$$
-   The transition is mathematically continuous, eliminating jump-cuts while returning to true satellite coordinates.
+The browser downloads standard OSM raster tiles as they are viewed; the basemap therefore requires internet. The Android app uses osmdroid's Mapnik tile source. Historic raster and debug PNGs remain in the repository but are no longer loaded by the current map code.
 
----
+## Model details
 
-## 4. Benchmark Validation & Component Ablation Study (Simulation-Based)
+- Architecture: three Conv1D layers with batch normalization and LeakyReLU, followed by a small regressor.
+- Input: `[1, 6, 50]`, normalized accelerometer and gyroscope channels.
+- Output: forward speed in m/s and yaw rate in rad/s.
+- The current file is ordinary FP32 ONNX. Qualcomm QNN compilation, INT8 quantization, and confirmed Hexagon execution are not present.
+- Latency shown by Android is elapsed time around the ONNX Runtime call, not a confirmed NPU-only measurement.
 
-To evaluate the algorithmic architecture, we conducted a systematic 4-way ablation study over a **45.0-second total GPS blackout** inside a curved underpass simulation using full 6-axis IMU telemetry with per-channel Z-score normalization.
+## Work needed for a defensible evaluation
 
-* **Sensor Noise Grounding:** Accelerometer and gyroscope channels reflect standard consumer MEMS sensor drift (bias random walk and ~0.2°/s gyro drift). Engine vibration reflects primary 1st-order rotational engine imbalance (25–50 Hz, $3.2\text{ m/s}^2$) and road roughness impulses (ISO 8608 Class C/D).
-* **Doppler Velocity Initialization:** Baseline dead-reckoning filters initialize using standard Doppler velocity estimation ($\pm 0.15\text{ m/s}$ noise) at the blackout boundary.
-* **Vector Decomposition:** Total error is decomposed into orthogonal components relative to the road centerline: Along-Track Longitudinal Error ($e_\parallel$) and Cross-Track Lateral Error ($e_\perp$), satisfying $e_{\text{total}} = \sqrt{e_\parallel^2 + e_\perp^2}$.
-* **Reproducibility Note:** All metrics are evaluated under a fixed random seed (`seed=42`) for deterministic computational reproduction.
+1. Train and validate on independent real routes, separating routes before generating windows and fitting normalization statistics only on the training split.
+2. Replace ground-truth-driven map progression with route matching based only on the estimate and an independently sourced road graph.
+3. Recompute all benchmark artifacts and publish median, mean, and tail errors across held-out routes, with scripts and exact data provenance.
+4. Profile the actual Android execution provider and end-to-end inference latency on the target phone.
+5. Run disconnect, screen-off/Doze, blackout, and GPS reacquisition tests on a moving device.
+6. Add route selection and multi-corridor geometry only after the data format and real route captures are available.
 
-### 4-Way Component Ablation Results (45-Second Blackout Window, Seed=42):
+## Demo setup
 
-| Strategy | Max Total Error | End Total Error | End Along-Track ($e_\parallel$) | End Cross-Track ($e_\perp$) | RMSE | Average Drift Rate |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1. Naive Double Integration (No Neural, No Map)** | 114.00 m | 114.00 m | 24.74 m | 111.28 m | 49.30 m | 2.533 m/s |
-| **2. Map Manifold Alone (Classical INS + Map)** | 40.29 m | 24.80 m | 24.74 m | 1.80 m | 16.24 m | 0.551 m/s |
-| **3. Neural Velocity Alone (1D-CNN, No Map)** | 52.40 m | 52.40 m | 5.64 m | 52.09 m | 28.94 m | 1.164 m/s |
-| **4. TrueTrack Full Stack (Neural + Map Manifold)** | **0.95 m** | **0.37 m** | **0.12 m** | **0.34 m** | **0.52 m** | **0.008 m/s** |
-
-### Measured Component Breakdown & Physical Proof:
-1. **Strategy 1 (Naive Classical INS):** Uncorrected gyro bias rotates the vehicle's heading vector by ~15°, projecting forward speed sideways. At blackout exit, the total 114.00 m error decomposes into **111.28 m of lateral cross-track divergence** and **24.74 m of along-track error** ($\sqrt{24.74^2 + 111.28^2} = 114.00\text{ m}$).
-2. **Strategy 2 (Map Manifold Alone):** The road manifold clamps lateral wandering down to the single-lane boundary ($1.80\text{ m}$), but leaves the along-track longitudinal error ($24.74\text{ m}$ at exit, peaking at **40.25 m along-track** during deceleration) unmitigated ($\sqrt{24.74^2 + 1.80^2} = 24.80\text{ m}$).
-3. **Strategy 3 (Neural Velocity Alone):** The 1D-CNN provides high-precision longitudinal odometry (only **5.64 m along-track error** over 45s), but without topological heading constraints, unconstrained gyro yaw integration drifts laterally into the terrain (**52.09 m cross-track**).
-4. **Strategy 4 (TrueTrack Full Stack):** The multi-stage pipeline resolves both axes simultaneously: **Neural Velocity** bounds along-track error to **0.12 m**, while the **Road Manifold** bounds cross-track error to **0.34 m**, locking total end-of-blackout error to **0.37 m (RMSE 0.52 m)**.
-
-> **Scope Limitation & Edge Topology:**  
-> *This benchmark models a single continuous underpass corridor. For multi-branch underground tunnels with bifurcations, an offline Hidden Markov Model (HMM) evaluates emission and transition probabilities across candidate road branches prior to projection.*
-
----
-
-## 5. Prototype Status & The 30-Hour On-Ground iQOO Build Roadmap
-
-### Phase 0 Status: Pre-Event Algorithmic & Field Validation
-* **Field Hardware Grounding (Android Testbed $\to$ iQOO 15 Target):** Preliminary field data was recorded using an Android test smartphone (Samsung Galaxy M35 5G) mounted on a commuter two-wheeler handlebar prior to on-site loaner hardware access. The physical phenomena—engine harmonics, road roughness impulses ($9g$ pothole spikes), and $22.1^\circ$ cornering lean—are vehicle and pavement properties that transfer across smartphone chassis. On-site, the pre-trained model deploys directly to the **iQOO 15 (Qualcomm SM8850 Snapdragon 8 Elite Gen 5)** Hexagon HTP.
-* **Geographical Grounding (Chennai Field Rides $\to$ Hyderabad Evaluation Corridor):** Physical GNSS blackout behavior, engine vibration profiles, and motorcycle bank angles were validated on multi-kilometer rides in **Chennai** (`Varadarajapuram` underpass/flyover with GPS accuracy degrading from 5.4m to 18.52m; `Rohini Theatre Koyambedu` flyover curve with $22.1^\circ$ lean; `45_46` city arterial). Our interactive flight recorder cockpit models the **Hyderabad HITEC City Mindspace Underpass** surveyed road manifold, demonstrating that TrueTrack generalizes to identical grade-separated corridors across India.
-* **Asynchronous 50 Hz Jitter & Resampling Pipeline:** Full Python multi-sensor synchronizer (`load_real_imu_data.py`) interpolating asynchronous $\sim 60.8\text{ Hz}$ phone IMU streams onto a uniform 50.0 Hz timebase with $R_x(-\phi)$ lean de-rolling.
-* **Exported Model Artifacts:** Full 6-axis normalized 1D-CNN velocity regression model trained and exported to standard ONNX format (`truetrack_model.onnx`, 103.7 KB) and TorchScript (`truetrack_model.torchscript`, 133.3 KB).
-* **Interactive Navigation Console:** Complete web-based flight recorder cockpit (`web_app/index.html`, `navigation_engine.js`) providing real-time evaluation of Legacy GPS failure vs. TrueTrack continuous inertial navigation, real-time telemetry, EKF covariance ellipse, audio alerts, and manual GPS kill-switch.
-
-### The 30-Hour On-Ground Build Plan on Physical iQOO Device (Qualcomm SM8850 / Snapdragon 8 Elite Gen 5 Hexagon HTP):
-
-1. **Hours 00:00 – 04:00 | Qualcomm QNN INT8 Compilation:**
-   - Convert `truetrack_model.onnx` using Qualcomm Neural Processing SDK (`qnn-onnx-converter`).
-   - Quantize to INT8 using our calibration dataset; compile into standalone binary `truetrack_htp.bin` targeting the Hexagon Tensor Processor (`libQnnHtp.so`), adhering to Android 15's transition from deprecated NNAPI to direct vendor QNN.
-   - Validate on-device execution meeting the $\le 1.4\text{ ms}$ architectural latency budget on the physical iQOO phone via `qnn-net-run`.
-
-2. **Hours 04:00 – 10:00 | Android Native C++ NDK Sensor Ingestion:**
-   - Develop a high-priority C++ pthread via Android NDK (`ASensorManager`, `ASensorEventQueue`) polling calibrated 6-axis IMU data at 50 Hz (`SENSOR_DELAY_FASTEST`).
-   - Maintain a 50-sample circular ring buffer in shared native memory with NEON SIMD Z-score normalization ($< 0.05\text{ ms}$).
-
-3. **Hours 10:00 – 16:00 | On-Device EKF & Local Spatio-Temporal Road Manifold:**
-   - Implement discrete-time EKF in C++ (Eigen / header-only matrix math) propagating Riccati covariance ($P$) at 50 Hz.
-   - Package a local SQLite / FlatGeobuf vector extract ($< 15\text{ MB}$) of the target municipal corridor with R-Tree spatial indexing for sub-millisecond road queries ($< 0.2\text{ ms}$).
-   - Enforce Indian Road Congress (IRC:86) single-lane lateral bounds ($\le 1.8\text{ m}$).
-
-4. **Hours 16:00 – 22:00 | Native Android UI, Blackout Failsafe & Audio Synthesizer:**
-   - Build a standalone Jetpack Compose / MapLibre Native Android app running at 60–120 FPS.
-   - Implement smooth sigmoid reconciliation over a 3.0-second window upon GPS re-lock (`P_display = (1 - \alpha) * P_DR + \alpha * P_GPS`), eliminating jarring marker teleportation.
-   - Native PCM AudioTrack sound generator emitting turn alerts and acoustic status cues.
-
-5. **Hours 22:00 – 26:00 | Physical Vibration Test Rig & Power Profiling:**
-   - Clamp the iQOO phone onto a mechanical vibration test rig replicating single-cylinder engine rumble (25–45 Hz).
-   - Profile battery consumption and thermal dissipation using Snapdragon Profiler (target: $< 2.5\%$ battery drain per hour; thermal delta $< 2.5^\circ\text{C}$).
-
-6. **Hours 26:00 – 30:00 | Live Stage Demonstration & Failover Test:**
-   - Setup ultra-low latency USB-C DisplayPort / `scrcpy` 120 FPS screen mirroring for the jury.
-   - **The On-Stage Proof:** Live demonstration toggling off Android Location/GNSS in real time while moving and rotating the iQOO phone on the demo table; demonstrate continuous, drift-bounded neural dead reckoning along the road network with sub-1.4 ms NPU inference and zero cloud connectivity.
-
----
-
-## 6. Team Experience & Feasibility
-* **Sensor Fusion & EKF Background:** Hands-on experience developing and tuning Extended Kalman Filter state estimation on Pixhawk flight controllers for GPS-denied UAV navigation.
-* **Spatial & Routing Infrastructure:** Direct experience parsing OpenStreetMap vector networks and topology graphs from prior geospatial routing work.
-* **Edge ML & Optimization:** Familiarity with PyTorch, ONNX export, INT8 quantization, and embedded inference workflows.
-
----
-
-## 7. Real-World Impact
-TrueTrack requires **zero hardware additions, zero OBD cables, and zero retrofit expense**—it works on any budget Android smartphone already sitting in an Indian delivery rider's phone mount. By bridging the critical blackout gap during underground navigation, TrueTrack prevents wrong-turn detours, protects delivery rider livelihoods, and establishes a new standard for smartphone-only vehicular dead reckoning.
+Serve the browser cockpit locally with `python -m http.server 8000 --directory web_app`. For the Android telemetry bridge over USB, run `adb reverse tcp:8765 tcp:8765` and connect to `localhost:8765`. The bridge sends telemetry only; the browser's Kill GPS control changes the browser simulation, not phone location services.

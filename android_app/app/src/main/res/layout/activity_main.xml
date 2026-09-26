@@ -40,7 +40,7 @@
                 android:background="@color/bg_card"
                 android:paddingHorizontal="8dp"
                 android:paddingVertical="3dp"
-                android:text="ONNX: N/A"
+                android:text="ORT: N/A"
                 android:textSize="10sp"
                 android:textColor="@color/accent_blue"
                 android:fontFamily="monospace" />
@@ -71,18 +71,28 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:layout_marginStart="10dp"
-                android:text="GNSS LOCKED (50 Hz SENSOR/SIM)"
+                android:text="GNSS: SIMULATED LOCK"
                 android:textColor="@color/text_primary"
-                android:textSize="12sp"
+                android:textSize="15sp"
+                android:textStyle="bold"
                 android:fontFamily="monospace" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="28dp"
+                android:layout_marginHorizontal="8dp"
+                android:background="@color/border_subtle" />
 
             <TextView
                 android:id="@+id/tvBlackoutTimer"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:minWidth="52dp"
+                android:gravity="center"
                 android:text="00:00"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp"
+                android:textStyle="bold"
                 android:fontFamily="monospace" />
         </LinearLayout>
     </LinearLayout>
@@ -121,8 +131,8 @@
                 android:id="@+id/tvSpeed"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="41.2"
-                android:textSize="32sp"
+                android:text="--"
+                android:textSize="40sp"
                 android:textStyle="bold"
                 android:textColor="@color/accent_blue"
                 android:fontFamily="monospace" />
@@ -131,8 +141,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="km/h"
-                android:textColor="@color/text_muted"
-                android:textSize="11sp" />
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
         </LinearLayout>
 
         <View
@@ -160,7 +170,7 @@
                 android:id="@+id/tvLeanAngle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="18.4°"
+                android:text="--"
                 android:textSize="32sp"
                 android:textStyle="bold"
                 android:textColor="@color/alert_amber"
@@ -170,9 +180,12 @@
                 android:id="@+id/tvLeanDirection"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="RIGHT LEAN (R_x De-rolled)"
+                android:layout_marginTop="2dp"
+                android:text="WAITING FOR SENSOR DATA"
                 android:textColor="@color/alert_amber"
-                android:textSize="10sp" />
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:gravity="center" />
         </LinearLayout>
     </LinearLayout>
 
@@ -205,7 +218,7 @@
                 android:id="@+id/tvYawRate"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="4.2 °/s"
+                android:text="-- °/s"
                 android:textSize="14sp"
                 android:textColor="@color/text_primary"
                 android:textStyle="bold"
@@ -223,14 +236,14 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="LATERAL CONSTRAINT"
+                android:text="ROUTE OFFSET"
                 android:textSize="9sp"
                 android:textColor="@color/text_secondary" />
             <TextView
-                android:id="@+id/tvLateralConstraint"
+                android:id="@+id/tvRouteOffset"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="IRC:86 (≤1.8m)"
+                android:text="-- m"
                 android:textSize="14sp"
                 android:textColor="@color/status_green"
                 android:textStyle="bold"
@@ -314,12 +327,28 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
-                    android:text="LIVE NEURAL TRAJECTORY"
+                    android:text="SIMULATED TRAJECTORY"
                     android:textColor="@color/text_primary"
                     android:textSize="10sp"
                     android:textStyle="bold"
                     android:fontFamily="monospace" />
             </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvRouteDeviationBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|end"
+                android:layout_margin="10dp"
+                android:background="@color/alert_red"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="8dp"
+                android:text="OFF ROUTE - DR ONLY"
+                android:textColor="@android:color/white"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:fontFamily="monospace"
+                android:visibility="gone" />
 
             <!-- Floating Bottom-Left Map Legend -->
             <LinearLayout
@@ -363,11 +392,23 @@
                     android:fontFamily="monospace" />
             </LinearLayout>
 
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|center_horizontal"
+                android:layout_marginBottom="10dp"
+                android:background="@drawable/bg_map_hud_chip"
+                android:paddingHorizontal="6dp"
+                android:paddingVertical="3dp"
+                android:text="© OpenStreetMap contributors"
+                android:textColor="@color/text_secondary"
+                android:textSize="9sp" />
+
             <!-- Floating Recenter FAB -->
             <ImageButton
                 android:id="@+id/btnRecenter"
-                android:layout_width="38dp"
-                android:layout_height="38dp"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
                 android:layout_gravity="bottom|end"
                 android:layout_margin="10dp"
                 android:background="@drawable/bg_recenter_button"
@@ -408,7 +449,7 @@
         <Button
             android:id="@+id/btnKillGps"
             android:layout_width="match_parent"
-            android:layout_height="46dp"
+            android:layout_height="48dp"
             android:backgroundTint="@color/alert_red"
             android:text="KILL GPS FIX (SIMULATE BLACKOUT)"
             android:textColor="@color/text_primary"
@@ -425,7 +466,7 @@
             <Button
                 android:id="@+id/btnDemoMode"
                 android:layout_width="0dp"
-                android:layout_height="38dp"
+                android:layout_height="48dp"
                 android:layout_weight="1.2"
                 android:layout_marginEnd="3dp"
                 android:backgroundTint="@color/bg_card"
@@ -437,7 +478,7 @@
             <Button
                 android:id="@+id/btnToggleVoice"
                 android:layout_width="0dp"
-                android:layout_height="38dp"
+                android:layout_height="48dp"
                 android:layout_weight="0.9"
                 android:layout_marginEnd="3dp"
                 android:backgroundTint="@color/bg_card"
@@ -449,11 +490,11 @@
             <Button
                 android:id="@+id/btnToggleLeanCorrection"
                 android:layout_width="0dp"
-                android:layout_height="38dp"
+                android:layout_height="48dp"
                 android:layout_weight="1"
                 android:backgroundTint="@color/bg_card"
-                android:text="LEAN NHC: ON"
-                android:textColor="@color/status_green"
+                android:text="LEAN DE-ROLL: OFF"
+                android:textColor="@color/alert_red"
                 android:textSize="10sp"
                 android:fontFamily="monospace" />
         </LinearLayout>

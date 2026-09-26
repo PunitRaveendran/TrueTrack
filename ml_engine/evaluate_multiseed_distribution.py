@@ -10,7 +10,7 @@ from train_and_export_model import NeuralInertial1DCNN
 
 def run_multiseed_evaluation():
     print("=" * 60)
-    print("TrueTrack - Multi-Seed Held-Out Monte Carlo Validation")
+    print("TrueTrack - Same-Route Synthetic Sensor-Noise Sensitivity (GT-Assisted)")
     print("=" * 60)
 
     device = torch.device('cpu')
@@ -28,7 +28,9 @@ def run_multiseed_evaluation():
     dt = 0.02
     is_blackout = df['is_blackout'].values
 
-    # Evaluate across 5 distinct held-out sensor noise & vibration seeds
+    # Five sensor-noise perturbations of the same synthetic drive are not
+    # held-out trajectories. Position and heading are also used as blackout
+    # map-matching oracles below, so these numbers are diagnostic only.
     seeds = [42, 101, 2024, 777, 999]
     results = []
 
@@ -100,6 +102,11 @@ def run_multiseed_evaluation():
     worst_val = float(np.max(max_errs))
     
     summary = {
+        "evaluation_type": "same-route synthetic sensor-noise sensitivity",
+        "independent_validation": False,
+        "ground_truth_assistance": "Blackout integration and map projection use per-frame ground-truth heading and position",
+        "model_artifact_status": "Pre-existing weights and normalization were not regenerated with the corrected chronological trainer; stored validation provenance remains random-overlapping-window.",
+        "interpretation": "Do not present these metrics as real-world performance or held-out generalization",
         "runs": results,
         "median_max_error_m": round(median_val, 2),
         "p95_max_error_m": round(p95_val, 2),

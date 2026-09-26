@@ -1,4 +1,9 @@
 {
+  "evaluation_type": "same-route synthetic sensor-noise sensitivity",
+  "independent_validation": false,
+  "ground_truth_assistance": "Blackout integration and map projection use per-frame ground-truth heading and position.",
+  "model_artifact_status": "Pre-existing weights and normalization were not regenerated with the corrected chronological trainer; stored validation provenance remains random-overlapping-window.",
+  "interpretation": "Do not present these metrics as real-world performance or held-out generalization.",
   "runs": [
     {
       "seed": 42,

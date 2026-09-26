@@ -1,16 +1,20 @@
 """
 TrueTrack - Extended Benchmarking & Diagnostic Data Generator
 =============================================================
-Calculates rigorous, physical metrics with zero synthetic fabrication:
-1. True discrete-time EKF covariance matrix (P) propagation:
-   - State: [x, y, v, theta]
-   - Propagates along-track (sigma_along) and cross-track (sigma_cross) uncertainties.
-2. Tone-injection sensitivity test:
-   - Quantifies model vibration rejection (dB) against 35 Hz engine harmonics.
+Generates synthetic scenario diagnostics (not physical or independent evaluation):
+1. Illustrative covariance-matrix propagation (not a navigation EKF):
+   - State: [x, y, v, theta], with ground-truth-assisted position projection.
+2. Synthetic tone-injection sensitivity calculation:
+   - A 35 Hz tone sampled at 50 Hz aliases to 15 Hz; this is not a physical
+     engine-harmonic rejection measurement.
 3. Export of all 4 ablation trajectories + Hard-Snap variant:
    - naive, map_alone, neural_alone, truetrack (sigmoid), truetrack_hardsnap
-4. Real FFT frequency analysis (0-50 Hz) of raw accelerometer stream showing 35 Hz peak.
+4. FFT of synthetic accelerometer data over the 0-25 Hz Nyquist band.
 5. 2.0m Map-Perturbation Stress Test.
+
+Evaluation caveat: blackout map projection uses per-frame ground-truth
+position and heading. Resulting errors and covariance are ground-truth-assisted
+and must not be presented as leak-free real-world performance.
 """
 
 import os
@@ -61,9 +65,9 @@ def run_extended_pipeline():
     # -------------------------------------------------------------
     # 1. Tone-Injection Vibration Sensitivity Test
     # -------------------------------------------------------------
-    print("\n[1/5] Running Tone-Injection Vibration Rejection Test...")
-    # Inject 35 Hz tone of 3.5 m/s^2 into rolling windows and measure speed delta
-    t_win = np.linspace(0, 1.0, 50)
+    print("\n[1/5] Running synthetic aliased-tone sensitivity calculation...")
+    # Inject a 35 Hz tone; at 50 Hz sampling it aliases to 15 Hz.
+    t_win = np.arange(50) * dt
     test_wins_base = []
     test_wins_vibe = []
     
@@ -88,7 +92,7 @@ def run_extended_pipeline():
     # Sensitivity ratio in dB: 20 * log10(delta_v / A)
     attenuation_db = round(float(20 * np.log10(delta_v_mean / 3.5)), 1)
     print(f"  > Mean delta speed under 3.5 m/s^2 (35 Hz) vibration: {delta_v_mean:.4f} m/s")
-    print(f"  > Measured Vibration Attenuation: {attenuation_db} dB")
+    print(f"  > Synthetic aliased-tone sensitivity ratio: {attenuation_db} dB")
     
     # -------------------------------------------------------------
     # 2. Neural Model Inference across Trajectory
@@ -248,9 +252,9 @@ def run_extended_pipeline():
                 tt_y[i] = target_gps_y
 
     # -------------------------------------------------------------
-    # 4. True Discrete EKF Covariance Propagation
+    # 4. Simplified covariance proxy; it is not connected to the trajectory filter.
     # -------------------------------------------------------------
-    print("\n[4/5] Propagating Real Discrete-Time EKF Covariance (P Matrix)...")
+    print("\n[4/5] Propagating a ground-truth-assisted covariance proxy (not a navigation EKF)...")
     # State: [x, y, v, theta]
     P = np.diag([1.44, 1.44, 0.04, 0.001]) # GPS nominal covariance (1.2m sigma)
     sigma_along = np.zeros(n_samples)
@@ -297,9 +301,9 @@ def run_extended_pipeline():
     print(f"  > Blackout Exit Covariance:  sigma_along = {sigma_along[4249]:.2f}m, sigma_cross = {sigma_cross[4249]:.2f}m")
     
     # -------------------------------------------------------------
-    # 5. Real FFT Spectrum of IMU Stream
+    # 5. FFT of the synthetic IMU stream (Nyquist frequency is 25 Hz).
     # -------------------------------------------------------------
-    print("\n[5/5] Computing FFT Frequency Spectrum (0-50 Hz)...")
+    print("\n[5/5] Computing synthetic FFT Frequency Spectrum (0-25 Hz Nyquist band)...")
     # Take 500 samples (~10s) inside vibration zone
     vibe_seg = ay[2200:2700]
     fft_vals = np.abs(np.fft.rfft(vibe_seg))
@@ -433,19 +437,27 @@ def run_extended_pipeline():
         "freqs": fft_freqs_list,
         "magnitudes": fft_norm,
         "dominant_peak_hz": float(peak_freq),
-        "measured_vibration_attenuation_db": attenuation_db,
-        "measurement_method": "35 Hz tone-injection sensitivity test (3.5 m/s^2 amplitude)"
+        "synthetic_tone_sensitivity_db": attenuation_db,
+        "frequency_source": "Synthetic telemetry; 50 Hz sampling limits the spectrum to the 25 Hz Nyquist frequency",
+        "sensitivity_method": "Synthetic 35 Hz tone sampled at 50 Hz (aliases to 15 Hz); not a physical engine-vibration measurement"
     }
     
     stress_test_package = {
         "simulated_osm_map_offset_m": offset_dist,
         "max_drift_with_offset_m": max_perturbed_err,
-        "explanation": "Evaluates performance when local OSM road vector is misaligned by 2.0 meters."
+        "explanation": "Synthetic 2.0 m route offset; map projection and error calculation use per-frame ground truth, so this is not an independent map-accuracy evaluation."
     }
     
     # Load base metrics
     with open('ml_engine/benchmark_results.json', 'r') as f:
         bench_metrics = json.load(f)
+    bench_metrics.update({
+        "evaluation_type": "synthetic single-route diagnostic",
+        "independent_validation": False,
+        "ground_truth_assistance": "During blackout, map projection and error decomposition use per-frame ground-truth position and heading.",
+        "performance_claims_supported": False,
+        "model_artifact_status": "Pre-existing weights and normalization were not regenerated with the corrected chronological trainer; stored validation provenance remains random-overlapping-window."
+    })
         
     # Load multi-seed distribution
     dist_path = 'ml_engine/multiseed_evaluation.json'
