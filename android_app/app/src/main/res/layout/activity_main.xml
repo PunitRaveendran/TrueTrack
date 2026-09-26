@@ -40,7 +40,7 @@
                 android:background="@color/bg_card"
                 android:paddingHorizontal="8dp"
                 android:paddingVertical="3dp"
-                android:text="HEXAGON NPU 1.4ms"
+                android:text="ONNX: N/A"
                 android:textSize="10sp"
                 android:textColor="@color/accent_blue"
                 android:fontFamily="monospace" />
@@ -233,31 +233,6 @@
                 android:text="IRC:86 (≤1.8m)"
                 android:textSize="14sp"
                 android:textColor="@color/status_green"
-                android:textStyle="bold"
-                android:fontFamily="monospace" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginEnd="4dp"
-            android:background="@color/bg_card"
-            android:padding="8dp"
-            android:orientation="vertical">
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="DRIFT RATE"
-                android:textSize="9sp"
-                android:textColor="@color/text_secondary" />
-            <TextView
-                android:id="@+id/tvDriftRate"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="0.008 m/s"
-                android:textSize="14sp"
-                android:textColor="@color/accent_blue"
                 android:textStyle="bold"
                 android:fontFamily="monospace" />
         </LinearLayout>

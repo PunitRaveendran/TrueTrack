@@ -9,5 +9,5 @@
     <string name="label_speed">SPEED</string>
     <string name="label_lean">LEAN ANGLE</string>
     <string name="label_drift">EST. DRIFT</string>
-    <string name="label_latency">NPU INFERENCE</string>
+    <string name="label_latency">ONNX INFERENCE</string>
 </resources>

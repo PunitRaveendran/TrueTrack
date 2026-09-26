@@ -129,7 +129,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var blackoutStartTimeMs = 0L
     private var useLeanCorrection = true
     private var lastInferenceTimeMs = 0L
-    private var lastNpuLatencyMs = 1.4f
+    private var lastNpuLatencyMs = 0.0f
 
     // Simulation Data & Playback Engine
     private val simulationFrames = mutableListOf<TelemetryFrame>()
@@ -144,13 +144,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     // UI View References
     private lateinit var tvSpeed: TextView
+    private lateinit var tvNpuBadge: TextView
     private lateinit var tvLeanAngle: TextView
     private lateinit var tvLeanDirection: TextView
     private lateinit var tvYawRate: TextView
     private lateinit var tvLateralConstraint: TextView
     private lateinit var tvGpsStatus: TextView
     private lateinit var tvBlackoutTimer: TextView
-    private lateinit var tvDriftRate: TextView
     private lateinit var tvServerStatus: TextView
     private lateinit var tvRawImu: TextView
     private lateinit var btnKillGps: Button
@@ -264,6 +264,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var drHeadingDeg = 359.0
     private var naiveLat = 17.443514
     private var naiveLon = 78.377107
+    private var naiveVelocityEastMps = 0.0
+    private var naiveVelocityNorthMps = 0.0
+    private var naiveHeadingDeg = 359.0
+    private var naiveLastUpdateNanos = 0L
+    private var lastLiveSpeedKmh = 0.0f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -414,13 +419,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     private fun initViews() {
         tvSpeed = findViewById(R.id.tvSpeed)
+        tvNpuBadge = findViewById(R.id.tvNpuBadge)
         tvLeanAngle = findViewById(R.id.tvLeanAngle)
         tvLeanDirection = findViewById(R.id.tvLeanDirection)
         tvYawRate = findViewById(R.id.tvYawRate)
         tvLateralConstraint = findViewById(R.id.tvLateralConstraint)
         tvGpsStatus = findViewById(R.id.tvGpsStatus)
         tvBlackoutTimer = findViewById(R.id.tvBlackoutTimer)
-        tvDriftRate = findViewById(R.id.tvDriftRate)
         tvServerStatus = findViewById(R.id.tvServerStatus)
         tvRawImu = findViewById(R.id.tvRawImu)
         btnKillGps = findViewById(R.id.btnKillGps)
@@ -456,6 +461,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 isBlackout = false
                 blackoutStartTimeMs = 0L
                 gpsReacquisitionFixCount = 0
+                naiveLat = drLat
+                naiveLon = drLon
+                naiveVelocityEastMps = 0.0
+                naiveVelocityNorthMps = 0.0
+                naiveHeadingDeg = drHeadingDeg
             }
             updateGpsSubscription()
         }
@@ -700,8 +710,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         ayIn: Float,
         azIn: Float
     ) {
-        val startTime = SystemClock.elapsedRealtimeNanos()
-
         // 3D Acceleration Magnitude & G-Force from live sensor
         val accelMag = sqrt(rawAx * rawAx + rawAy * rawAy + rawAz * rawAz)
         val gyroMag = sqrt(rawGx * rawGx + rawGy * rawGy + rawGz * rawGz)
@@ -739,7 +747,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 audioManager.onBlackoutEntered()
             }
 
-            lastNpuLatencyMs = 1.4f
+            lastNpuLatencyMs = 0.0f
         } else if (!isStationary && ortSession != null && ortEnv != null) {
             // ==========================================
             // LIVE SENSOR MODE (Movement detected)
@@ -748,9 +756,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 val tensorBuffer = FloatBuffer.wrap(snapshotBuffer)
                 val inputShape = longArrayOf(1, numChannels.toLong(), windowSize.toLong())
                 val inputTensor = OnnxTensor.createTensor(ortEnv, tensorBuffer, inputShape)
+                val inputs = mapOf(ortSession!!.inputNames.first() to inputTensor)
 
                 // ortSession.run is strictly serialized on inferenceExecutor (zero thread races)
-                val results = ortSession!!.run(mapOf(ortSession!!.inputNames.first() to inputTensor))
+                val inferenceStartNs = System.nanoTime()
+                val results = ortSession!!.run(inputs)
+                lastNpuLatencyMs = (System.nanoTime() - inferenceStartNs) / 1_000_000.0f
                 val output = (results[0].value as Array<FloatArray>)[0]
 
                 val forwardSpeedMs = max(0.0f, output[0])
@@ -759,11 +770,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 speedKmh = forwardSpeedMs * 3.6f
                 yawRateDeg = Math.toDegrees(predYawRateRad.toDouble()).toFloat()
 
-                val durationNs = SystemClock.elapsedRealtimeNanos() - startTime
-                lastNpuLatencyMs = durationNs / 1_000_000.0f
                 inputTensor.close()
                 results.close()
             } catch (e: Exception) {
+                lastNpuLatencyMs = 0.0f
                 Log.e("MainActivity", "NPU inference error: ${e.message}")
             }
         } else {
@@ -772,7 +782,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             // ==========================================
             speedKmh = 0.0f
             yawRateDeg = 0.0f
-            lastNpuLatencyMs = 1.4f
+            lastNpuLatencyMs = 0.0f
         }
 
         // Update UI & Map on Main Thread
@@ -800,7 +810,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         leanDeg: Float,
         accelMag: Float
     ) {
+        lastLiveSpeedKmh = speedKmh
         tvSpeed.text = String.format(Locale.US, "%.1f", speedKmh)
+        tvNpuBadge.text = if (lastNpuLatencyMs > 0.0f) {
+            String.format(Locale.US, "ONNX %.2f ms", lastNpuLatencyMs)
+        } else {
+            "ONNX: N/A"
+        }
         tvLeanAngle.text = String.format(Locale.US, "%.1f°", abs(leanDeg))
         tvLeanDirection.text = when {
             leanDeg > 2.5f -> "RIGHT LEAN (R_x De-rolled)"
@@ -812,7 +828,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         )
 
         tvYawRate.text = String.format(Locale.US, "%.1f °/s", yawRateDeg)
-        tvDriftRate.text = if (isBlackout) "0.008 m/s (DR)" else "0.000 m/s (Lock)"
 
         if (isBlackout) {
             val elapsedSec = (SystemClock.elapsedRealtime() - blackoutStartTimeMs) / 1000
@@ -895,11 +910,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             trueTrackPolyline.setPoints(trueTrackPoints)
 
             if (isBlackout) {
-                val elapsedSec = (SystemClock.elapsedRealtime() - blackoutStartTimeMs) / 1000.0
-                val driftMeters = 0.5 * 0.12 * elapsedSec * elapsedSec
-                val driftDeg = driftMeters * 0.000009
-                naiveLat = drLat - driftDeg * 0.3
-                naiveLon = drLon + driftDeg * 0.95
+                val nowNs = SystemClock.elapsedRealtimeNanos()
+                val naiveDt = if (naiveLastUpdateNanos == 0L) 0.0 else
+                    ((nowNs - naiveLastUpdateNanos).coerceAtLeast(0L) / 1_000_000_000.0).coerceAtMost(0.5)
+                naiveLastUpdateNanos = nowNs
+                naiveHeadingDeg = (naiveHeadingDeg + Math.toDegrees(rawGz.toDouble() * naiveDt) + 360.0) % 360.0
+                val naiveHeadingRad = Math.toRadians(naiveHeadingDeg)
+                val accelEast = -rawAx * sin(naiveHeadingRad) + rawAy * cos(naiveHeadingRad)
+                val accelNorth = rawAx * cos(naiveHeadingRad) + rawAy * sin(naiveHeadingRad)
+                naiveVelocityEastMps += accelEast * naiveDt
+                naiveVelocityNorthMps += accelNorth * naiveDt
+                val deltaEastMeters = naiveVelocityEastMps * naiveDt
+                val deltaNorthMeters = naiveVelocityNorthMps * naiveDt
+                naiveLat += deltaNorthMeters / 111_320.0
+                naiveLon += deltaEastMeters / (111_320.0 * cos(Math.toRadians(naiveLat)))
                 driftPoints.add(GeoPoint(naiveLat, naiveLon))
                 if (driftPoints.size > 200) driftPoints.removeAt(0)
                 driftPolyline.setPoints(driftPoints)
@@ -935,6 +959,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         if (isBlackout) {
             blackoutStartTimeMs = SystemClock.elapsedRealtime()
             gpsReacquisitionFixCount = 0
+            naiveLat = drLat
+            naiveLon = drLon
+            val initialSpeedMps = lastLiveSpeedKmh / 3.6
+            val initialHeadingRad = Math.toRadians(drHeadingDeg)
+            naiveVelocityEastMps = initialSpeedMps * cos(initialHeadingRad)
+            naiveVelocityNorthMps = initialSpeedMps * sin(initialHeadingRad)
+            naiveHeadingDeg = drHeadingDeg
+            naiveLastUpdateNanos = SystemClock.elapsedRealtimeNanos()
             audioManager.onBlackoutEntered()
         } else {
             if (isDemoMode || blackoutStartTimeMs == 0L) {
