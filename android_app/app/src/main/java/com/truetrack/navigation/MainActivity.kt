@@ -12,6 +12,8 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.net.wifi.WifiManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.SystemClock
 import android.text.format.Formatter
 import android.util.Log
@@ -37,6 +39,8 @@ import org.osmdroid.views.overlay.Polyline
 import java.io.File
 import java.nio.FloatBuffer
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
@@ -117,6 +121,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private val simulationFrames = mutableListOf<TelemetryFrame>()
     private var simFrameIndex = 350 // Start 3 seconds before underpass blackout (t=35s)
     private var isDemoMode = true    // DEFAULT TO SIMULATION for reliable demonstration
+
+    // Dedicated Background Workers & Concurrency Isolation
+    private var sensorThread: HandlerThread? = null
+    private var sensorHandler: Handler? = null
+    private val inferenceExecutor = Executors.newSingleThreadExecutor()
+    private val isInferring = AtomicBoolean(false)
 
     // UI View References
     private lateinit var tvSpeed: TextView
@@ -471,9 +481,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
 
+        // Offload IMU polling onto a dedicated high-priority HandlerThread
+        sensorThread = HandlerThread("IMUSensorThread", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply {
+            start()
+            sensorHandler = Handler(looper)
+        }
+
         // 50 Hz target sampling interval = 20,000 microseconds
-        accelSensor?.let { sensorManager.registerListener(this, it, 20_000) }
-        gyroSensor?.let { sensorManager.registerListener(this, it, 20_000) }
+        sensorHandler?.let { handler ->
+            accelSensor?.let { sensorManager.registerListener(this, it, 20_000, handler) }
+            gyroSensor?.let { sensorManager.registerListener(this, it, 20_000, handler) }
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
@@ -528,11 +546,35 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val now = SystemClock.elapsedRealtime()
         if (samplesCollected >= windowSize && now - lastInferenceTimeMs >= 100) {
             lastInferenceTimeMs = now
-            runInference(currentPhi, axIn, ayIn, azIn)
+            if (isInferring.compareAndSet(false, true)) {
+                // Snapshot ring buffer into flat array [1, 6, 50]
+                val snapshotBuffer = FloatArray(numChannels * windowSize)
+                for (c in 0 until numChannels) {
+                    for (i in 0 until windowSize) {
+                        val idx = (bufferHead + i) % windowSize
+                        snapshotBuffer[c * windowSize + i] = imuRingBuffer[c][idx]
+                    }
+                }
+                inferenceExecutor.execute {
+                    try {
+                        runInferenceBackground(snapshotBuffer, currentPhi, axIn, ayIn, azIn)
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Background inference failure", e)
+                    } finally {
+                        isInferring.set(false)
+                    }
+                }
+            }
         }
     }
 
-    private fun runInference(currentPhiRad: Float, axIn: Float, ayIn: Float, azIn: Float) {
+    private fun runInferenceBackground(
+        snapshotBuffer: FloatArray,
+        currentPhiRad: Float,
+        axIn: Float,
+        ayIn: Float,
+        azIn: Float
+    ) {
         val startTime = SystemClock.elapsedRealtimeNanos()
 
         // 3D Acceleration Magnitude & G-Force from live sensor
@@ -578,18 +620,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             // LIVE SENSOR MODE (Movement detected)
             // ==========================================
             try {
-                val tensorBuffer = FloatBuffer.allocate(numChannels * windowSize)
-                for (c in 0 until numChannels) {
-                    for (i in 0 until windowSize) {
-                        val idx = (bufferHead + i) % windowSize
-                        tensorBuffer.put(imuRingBuffer[c][idx])
-                    }
-                }
-                tensorBuffer.rewind()
-
+                val tensorBuffer = FloatBuffer.wrap(snapshotBuffer)
                 val inputShape = longArrayOf(1, numChannels.toLong(), windowSize.toLong())
                 val inputTensor = OnnxTensor.createTensor(ortEnv, tensorBuffer, inputShape)
 
+                // ortSession.run is strictly serialized on inferenceExecutor (zero thread races)
                 val results = ortSession!!.run(mapOf(ortSession!!.inputNames.first() to inputTensor))
                 val output = (results[0].value as Array<FloatArray>)[0]
 
@@ -620,7 +655,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             updateDashboard(speedKmh, yawRateDeg, displayLeanDeg, accelMag)
         }
 
-        // Broadcast to Laptop Web Cockpit via WebSocket
+        // Broadcast to Laptop Web Cockpit via WebSocket (off-main-thread)
         streamServer?.broadcastTelemetry(
             timestampMs = System.currentTimeMillis(),
             speedKmh = speedKmh,
@@ -800,6 +835,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onDestroy() {
         super.onDestroy()
         sensorManager.unregisterListener(this)
+        sensorThread?.quitSafely()
+        inferenceExecutor.shutdown()
         audioManager.shutdown()
         if (::mapView.isInitialized) {
             mapView.onDetach()
