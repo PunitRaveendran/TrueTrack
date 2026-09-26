@@ -69,6 +69,28 @@ const CORRIDOR_CONFIGS = {
     rfNaiveDrift: '199.5%',
     rfNaiveSub: '672.8 m (blown off arterial)',
     rfCaption: 'High-speed cornering log with 22.1° measured rider lean angle'
+  },
+  '45_46': {
+    id: '45_46',
+    name: 'Chennai 45/46 Corridor (High Vibration • Pure DR)',
+    statusDesc: 'Real Phone IMU • 45s Blackout • Potholes & Vibration',
+    center: [80.2050, 13.0620],
+    zoom: 16.5,
+    minZoom: 14.0,
+    maxZoom: 18.0,
+    maxBounds: [[80.180, 13.040], [80.230, 13.080]],
+    telemetry: window.ROUTE_45_46_TELEMETRY || [],
+    startIndex: 0,
+    blackoutLeftPct: '20.0%',
+    blackoutWidthPct: '45.0%',
+    blackoutLabel: '45 s urban blackout (t=20s to 65s)',
+    rfBadge: 'CHENNAI VIBRATION LOG',
+    rfTarget: 'DRIFT TARGET: <10% (industry dead-reckoning benchmark)',
+    rfTTDrift: '214.4 m',
+    rfTTSub: '78.5% of travel (pure unassisted)',
+    rfNaiveDrift: '859.7 m',
+    rfNaiveSub: '314.9% (catastrophic divergence)',
+    rfCaption: 'Evaluated on real Chennai phone IMU against GPS ground truth under heavy road vibration'
   }
 };
 
@@ -84,6 +106,7 @@ class TrueTrackCockpit {
     this.currentIndex = 380; // Default starts 2s before blackout at t=38s, showing clear GPS lock first
     this.isPlaying = true;
     this.playbackSpeed = 1.0;
+    this.sampleWindowSize = 50; // Rolling window samples (10 to 100)
     this.lastFrameTime = performance.now();
 
     // Smooth Display Tweens for Hero Numbers
@@ -112,6 +135,11 @@ class TrueTrackCockpit {
     this.isDemoMode = false;
     this.demoStartTime = 0;
 
+    // Road Graph & POI Routing State (Task 1.4 & 1.5)
+    this.roadGraph = null;
+    this.demoPois = null;
+    this.activePoiRoute = null;
+
     // Component Ablation Toggles
     this.toggleNeural = true;
     this.toggleMap = true;
@@ -128,6 +156,7 @@ class TrueTrackCockpit {
 
     // Initialize Subsystems
     this.initMap();
+    this.loadDemoRoutingData();
     this.initControls();
     this.initAblation();
     this.initPhoneBridge();
@@ -311,6 +340,33 @@ class TrueTrackCockpit {
           'line-width': 1,
           'line-dasharray': [2, 2],
           'line-opacity': 0.5
+        }
+      });
+
+      // A* POI Destination Route Line (Task 1.4 & 1.5)
+      this.map.addSource('poi-route-source', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+      this.map.addLayer({
+        id: 'poi-route-casing',
+        type: 'line',
+        source: 'poi-route-source',
+        paint: {
+          'line-color': '#07090d',
+          'line-width': 5.5,
+          'line-opacity': 0.8
+        }
+      });
+      this.map.addLayer({
+        id: 'poi-route-layer',
+        type: 'line',
+        source: 'poi-route-source',
+        paint: {
+          'line-color': '#00f0ff',
+          'line-width': 3.2,
+          'line-opacity': 0.95,
+          'line-dasharray': [2, 1]
         }
       });
 
@@ -516,8 +572,55 @@ class TrueTrackCockpit {
         btn.classList.add('active');
         const spd = parseFloat(btn.dataset.speed || btn.getAttribute('data-speed'));
         this.playbackSpeed = isNaN(spd) ? 1.0 : spd;
+        const contSlider = document.getElementById('slider-continuous-speed');
+        const contVal = document.getElementById('val-continuous-speed');
+        if (contSlider) contSlider.value = this.playbackSpeed;
+        if (contVal) contVal.textContent = `${this.playbackSpeed.toFixed(1)}×`;
       });
     });
+
+    // 3-Trace Synchronized View Toggle Button (Task 1.6)
+    const btnThreeTrace = document.getElementById('btn-toggle-three-trace');
+    if (btnThreeTrace) {
+      btnThreeTrace.addEventListener('click', () => {
+        this.toggleDrawer();
+      });
+    }
+
+    // Rolling Sampling Window Slider: 10 to 100 samples (Task 1.7)
+    const sliderWindow = document.getElementById('slider-sample-window');
+    const valWindow = document.getElementById('val-sample-window');
+    if (sliderWindow) {
+      sliderWindow.addEventListener('input', (e) => {
+        this.sampleWindowSize = parseInt(e.target.value);
+        if (valWindow) {
+          valWindow.textContent = `${this.sampleWindowSize} samples (${(this.sampleWindowSize * 0.1).toFixed(1)}s)`;
+        }
+        this.render();
+      });
+    }
+
+    // Continuous Playback Speed Slider: 0.5x to 5.0x (Task 1.7)
+    const sliderSpeed = document.getElementById('slider-continuous-speed');
+    const valSpeed = document.getElementById('val-continuous-speed');
+    if (sliderSpeed) {
+      sliderSpeed.addEventListener('input', (e) => {
+        const spd = parseFloat(e.target.value);
+        this.playbackSpeed = spd;
+        if (valSpeed) valSpeed.textContent = `${spd.toFixed(1)}×`;
+        speedBtns.forEach(b => {
+          b.classList.toggle('active', Math.abs(parseFloat(b.dataset.speed) - spd) < 0.05);
+        });
+      });
+    }
+
+    // POI Destination Selector (Task 1.7)
+    const selectPoi = document.getElementById('select-poi');
+    if (selectPoi) {
+      selectPoi.addEventListener('change', (e) => {
+        this.routeToPoi(e.target.value);
+      });
+    }
 
     // 2.4-Second Gentle Auto-Dismiss for Intro Overlay
     const intro = document.getElementById('intro-overlay');
@@ -644,10 +747,12 @@ class TrueTrackCockpit {
     const drawer = document.getElementById('diagnostics-drawer');
     const btn = document.getElementById('btn-hood-toggle');
     const arrow = document.getElementById('hood-toggle-arrow');
+    const btnThreeTrace = document.getElementById('btn-toggle-three-trace');
     
     this.drawerOpen = forceState !== null ? forceState : !this.drawerOpen;
     if (drawer) drawer.classList.toggle('open', this.drawerOpen);
     if (arrow) arrow.innerHTML = this.drawerOpen ? '&blacktriangle;' : '&blacktriangledown;';
+    if (btnThreeTrace) btnThreeTrace.classList.toggle('active', this.drawerOpen);
     
     setTimeout(() => {
       if (this.map) this.map.resize();
@@ -852,6 +957,9 @@ class TrueTrackCockpit {
 
     this.canvasWave = document.getElementById('canvas-imu-wave');
     this.ctxWave = this.canvasWave ? this.canvasWave.getContext('2d') : null;
+
+    this.canvasNpu = document.getElementById('canvas-npu-trace');
+    this.ctxNpu = this.canvasNpu ? this.canvasNpu.getContext('2d') : null;
 
     this.canvasFft = document.getElementById('canvas-fft');
     this.ctxFft = this.canvasFft ? this.canvasFft.getContext('2d') : null;
@@ -1247,10 +1355,12 @@ class TrueTrackCockpit {
       }
     }
 
-    // Diagnostic Canvases
+    // Diagnostic & Synchronized Three-Trace Canvases (Task 1.6 & 1.7)
     this.drawErrorChart(i0);
+    this.drawImuWaveform(i0);
+    this.drawNpuTrace(i0);
+    this.updateLeanLightbar(cur);
     if (this.drawerOpen) {
-      this.drawImuWaveform(i0);
       this.drawFftSpectrum();
     }
   }
@@ -1614,15 +1724,18 @@ class TrueTrackCockpit {
     if (nodeBlend) nodeBlend.classList.toggle('active', isExitWindow);
   }
 
+  /* ========================================================================
+     Three-Trace Synchronized View: Trace 1 (50 Hz Raw IMU Waveforms)
+     ======================================================================== */
   drawImuWaveform(currentIdx) {
-    if (!this.ctxWave) return;
+    if (!this.ctxWave || !this.canvasWave) return;
     const ctx = this.ctxWave;
     const w = this.canvasWave.width;
     const h = this.canvasWave.height;
 
     ctx.clearRect(0, 0, w, h);
 
-    // Centerline
+    // Centerline (Zero reference)
     ctx.strokeStyle = '#1e222b';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -1630,26 +1743,327 @@ class TrueTrackCockpit {
     ctx.lineTo(w, h / 2);
     ctx.stroke();
 
-    // Rolling 100 samples
-    const windowSize = 80;
+    const windowSize = this.sampleWindowSize || 50;
     const start = Math.max(0, currentIdx - windowSize);
     const slice = this.telemetry.slice(start, currentIdx + 1);
     if (slice.length < 2) return;
 
+    // 1. Channel 1: ax (Forward Acceleration) - Cyan #38bdf8
     ctx.beginPath();
-    ctx.strokeStyle = '#8b94a2';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.3;
     slice.forEach((d, i) => {
       const x = (i / windowSize) * w;
-      let val = d.raw_imu_ay;
-      if (this.highVibrationInjected) {
-        val += 3.5 * Math.sin(2 * Math.PI * 29.93 * d.t);
-      }
-      const y = h / 2 - (val / 12.0) * (h / 2 - 6);
+      const val = d.raw_imu_ax || 0.0;
+      const y = h / 2 - (val / 10.0) * (h / 2 - 6);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
     ctx.stroke();
+
+    // 2. Channel 2: ay (Lateral Acceleration) - Amber #f59e0b
+    ctx.beginPath();
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 1.3;
+    slice.forEach((d, i) => {
+      const x = (i / windowSize) * w;
+      let val = d.raw_imu_ay || 0.0;
+      if (this.highVibrationInjected) {
+        val += 3.5 * Math.sin(2 * Math.PI * 29.93 * d.t);
+      }
+      const y = h / 2 - (val / 10.0) * (h / 2 - 6);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // 3. Channel 3: gz (Yaw Gyroscope) - Purple #c084fc
+    ctx.beginPath();
+    ctx.strokeStyle = '#c084fc';
+    ctx.lineWidth = 1.3;
+    slice.forEach((d, i) => {
+      const x = (i / windowSize) * w;
+      const val = d.raw_imu_gz || 0.0;
+      const y = h / 2 - (val / 0.8) * (h / 2 - 6);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Live Readout Labels in Drawer Footer
+    const cur = this.telemetry[currentIdx] || slice[slice.length - 1];
+    if (cur) {
+      const elAx = document.getElementById('trace-val-ax');
+      const elAy = document.getElementById('trace-val-ay');
+      const elGz = document.getElementById('trace-val-gz');
+      if (elAx) elAx.textContent = `ax: ${(cur.raw_imu_ax || 0).toFixed(2)} m/s²`;
+      if (elAy) elAy.textContent = `ay: ${(cur.raw_imu_ay || 0).toFixed(2)} m/s²`;
+      if (elGz) elGz.textContent = `gz: ${(cur.raw_imu_gz || 0).toFixed(4)} rad/s`;
+    }
+  }
+
+  /* ========================================================================
+     Three-Trace Synchronized View: Trace 2 (NPU Speed & Yaw Regressor)
+     ======================================================================== */
+  drawNpuTrace(currentIdx) {
+    if (!this.ctxNpu || !this.canvasNpu) return;
+    const ctx = this.ctxNpu;
+    const w = this.canvasNpu.width;
+    const h = this.canvasNpu.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Baseline
+    ctx.strokeStyle = '#1e222b';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h - 8);
+    ctx.lineTo(w, h - 8);
+    ctx.stroke();
+
+    const windowSize = this.sampleWindowSize || 50;
+    const start = Math.max(0, currentIdx - windowSize);
+    const slice = this.telemetry.slice(start, currentIdx + 1);
+    if (slice.length < 2) return;
+
+    // 1. Ground Truth GPS Speed (Slate faint reference)
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
+    ctx.lineWidth = 1.2;
+    slice.forEach((d, i) => {
+      const x = (i / windowSize) * w;
+      const spd = d.speed_kmh || 0.0;
+      const y = h - 8 - (spd / 60.0) * (h - 18);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // 2. NPU 1D-CNN Predicted Forward Speed (Emerald #10b981)
+    ctx.beginPath();
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 1.8;
+    slice.forEach((d, i) => {
+      const x = (i / windowSize) * w;
+      const predSpd = d.pred_speed_kmh || 0.0;
+      const y = h - 8 - (predSpd / 60.0) * (h - 18);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Live Readout Labels
+    const cur = this.telemetry[currentIdx] || slice[slice.length - 1];
+    if (cur) {
+      const elVp = document.getElementById('trace-val-vpred');
+      const elVgt = document.getElementById('trace-val-vgt');
+      const elYaw = document.getElementById('trace-val-yaw');
+      if (elVp) elVp.textContent = `v_pred: ${(cur.pred_speed_kmh || 0).toFixed(1)} km/h`;
+      if (elVgt) elVgt.textContent = `v_gt: ${(cur.speed_kmh || 0).toFixed(1)} km/h`;
+      if (elYaw) elYaw.textContent = `yaw: ${(cur.pred_yaw_deg_s || 0).toFixed(1)}°/s`;
+    }
+  }
+
+  /* ========================================================================
+     Two-Wheeler Lean NHC Lightbar & Tilt Gauge (Task 1.7)
+     ======================================================================== */
+  updateLeanLightbar(cur) {
+    if (!cur) return;
+    const ay = cur.raw_imu_ay || 0.0;
+    let leanDeg = (ay / 9.81) * (180.0 / Math.PI);
+    leanDeg = Math.max(-30.0, Math.min(30.0, leanDeg));
+
+    const valBadge = document.getElementById('val-lean-angle');
+    const fillLeft = document.getElementById('lean-fill-left');
+    const fillRight = document.getElementById('lean-fill-right');
+    const pointer = document.getElementById('lean-pointer');
+    const hoodLean = document.getElementById('hood-lean-val');
+    const badgeStatus = document.getElementById('badge-lean-status');
+
+    if (valBadge) {
+      const dir = leanDeg > 0.5 ? 'Right' : (leanDeg < -0.5 ? 'Left' : 'Upright');
+      valBadge.textContent = `${Math.abs(leanDeg).toFixed(1)}° ${dir}`;
+    }
+    if (hoodLean) {
+      hoodLean.textContent = `${Math.abs(leanDeg).toFixed(1)}°`;
+    }
+
+    if (fillLeft && fillRight && pointer) {
+      if (leanDeg < 0) {
+        fillLeft.style.width = `${Math.min(100, (-leanDeg / 30.0) * 100)}%`;
+        fillRight.style.width = '0%';
+      } else {
+        fillRight.style.width = `${Math.min(100, (leanDeg / 30.0) * 100)}%`;
+        fillLeft.style.width = '0%';
+      }
+      pointer.style.left = `${50.0 + (leanDeg / 30.0) * 50.0}%`;
+    }
+
+    if (badgeStatus) {
+      if (this.toggleLean) {
+        badgeStatus.className = 'lean-mode-badge active';
+        badgeStatus.textContent = 'LEAN NHC ACTIVE';
+      } else {
+        badgeStatus.className = 'lean-mode-badge disabled';
+        badgeStatus.textContent = 'CAR NHC LOCKED';
+      }
+    }
+  }
+
+  /* ========================================================================
+     A* On-Device Routing Over Bounded Road Graph (Task 1.4 & 1.5)
+     ======================================================================== */
+  async loadDemoRoutingData() {
+    try {
+      const [graphResp, poisResp] = await Promise.all([
+        fetch('data/demo_road_graph.json'),
+        fetch('data/demo_pois.json')
+      ]);
+      this.roadGraph = await graphResp.json();
+      const poiJson = await poisResp.json();
+      this.demoPois = poiJson.pois;
+      this.populatePoiSelect();
+    } catch (err) {
+      console.warn('Could not load demo road graph / POIs:', err);
+    }
+  }
+
+  populatePoiSelect() {
+    const sel = document.getElementById('select-poi');
+    if (!sel || !this.demoPois) return;
+    sel.innerHTML = '<option value="">A* Destination POI...</option>';
+    const originPoi = this.demoPois.find(p => p.id === 'raidurg_metro') || this.demoPois[0];
+    const reachMap = {};
+    if (originPoi && originPoi.reachable_destinations) {
+      originPoi.reachable_destinations.forEach(d => {
+        reachMap[d.id] = d.dist_m;
+      });
+    }
+
+    this.demoPois.forEach(poi => {
+      if (poi.id !== originPoi.id) {
+        const opt = document.createElement('option');
+        opt.value = poi.id;
+        const dStr = reachMap[poi.id] ? ` (${reachMap[poi.id]}m)` : '';
+        opt.textContent = `${poi.name}${dStr}`;
+        sel.appendChild(opt);
+      }
+    });
+  }
+
+  routeToPoi(targetPoiId) {
+    if (!this.roadGraph || !targetPoiId) {
+      this.clearPoiRoute();
+      return;
+    }
+    const targetPoi = this.demoPois.find(p => p.id === targetPoiId);
+    if (!targetPoi) return;
+
+    // Origin: Raidurg Metro Station (corridor origin)
+    const originPoi = this.demoPois.find(p => p.id === 'raidurg_metro') || this.demoPois[0];
+    const startNode = originPoi.target_node || originPoi.nearest_node;
+    const goalNode = targetPoi.target_node || targetPoi.nearest_node;
+
+    const path = this.runAStar(startNode, goalNode);
+    if (path && path.length > 0) {
+      const coords = path.map(nid => [this.roadGraph.nodes[nid].lon, this.roadGraph.nodes[nid].lat]);
+      this.displayPoiRoute(coords, targetPoi);
+    }
+  }
+
+  runAStar(startId, goalId) {
+    const nodes = this.roadGraph.nodes;
+    const adj = this.roadGraph.adjacency;
+    if (!nodes[startId] || !nodes[goalId]) return null;
+
+    const goalLat = nodes[goalId].lat;
+    const goalLon = nodes[goalId].lon;
+
+    const distM = (lat1, lon1, lat2, lon2) => {
+      const R = 6378137.0;
+      const dLat = ((lat2 - lat1) * Math.PI) / 180.0;
+      const dLon = ((lon2 - lon1) * Math.PI) / 180.0;
+      const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos((lat1 * Math.PI) / 180.0) * Math.cos((lat2 * Math.PI) / 180.0) * Math.sin(dLon / 2) ** 2;
+      return 2.0 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1.0 - a));
+    };
+
+    const openSet = [{ node: startId, g: 0, f: distM(nodes[startId].lat, nodes[startId].lon, goalLat, goalLon) }];
+    const cameFrom = {};
+    const gScore = { [startId]: 0 };
+
+    while (openSet.length > 0) {
+      let minIdx = 0;
+      for (let i = 1; i < openSet.length; i++) {
+        if (openSet[i].f < openSet[minIdx].f) minIdx = i;
+      }
+      const current = openSet.splice(minIdx, 1)[0].node;
+
+      if (current === goalId) {
+        const path = [current];
+        let curr = current;
+        while (cameFrom[curr]) {
+          curr = cameFrom[curr];
+          path.unshift(curr);
+        }
+        return path;
+      }
+
+      const edges = adj[current] || [];
+      for (const edge of edges) {
+        const neighbor = edge.target;
+        const tentativeG = gScore[current] + edge.dist_m;
+        if (gScore[neighbor] === undefined || tentativeG < gScore[neighbor]) {
+          cameFrom[neighbor] = current;
+          gScore[neighbor] = tentativeG;
+          const h = distM(nodes[neighbor].lat, nodes[neighbor].lon, goalLat, goalLon);
+          openSet.push({ node: neighbor, g: tentativeG, f: tentativeG + h });
+        }
+      }
+    }
+    return null;
+  }
+
+  displayPoiRoute(coords, targetPoi) {
+    if (!this.map || !this.mapLoaded) return;
+    const src = this.map.getSource('poi-route-source');
+    if (src) {
+      src.setData({
+        type: 'Feature',
+        properties: { name: targetPoi.name },
+        geometry: { type: 'LineString', coordinates: coords }
+      });
+    }
+
+    let totalDistM = 0;
+    for (let i = 1; i < coords.length; i++) {
+      const [lon1, lat1] = coords[i - 1];
+      const [lon2, lat2] = coords[i];
+      const dLat = (lat2 - lat1) * 110600.0;
+      const dLon = (lon2 - lon1) * 111320.0 * Math.cos((lat1 * Math.PI) / 180.0);
+      totalDistM += Math.hypot(dLat, dLon);
+    }
+
+    const banner = document.getElementById('map-alert-banner');
+    const alertText = document.getElementById('map-alert-text');
+    if (banner && alertText) {
+      alertText.innerHTML = `A* Navigation to <strong>${targetPoi.name}</strong>: ${Math.round(totalDistM)} m (${coords.length} nodes) &bull; Zero Contraflow`;
+      banner.style.display = 'flex';
+    }
+
+    const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+    this.map.fitBounds(bounds, { padding: 60, duration: 600 });
+  }
+
+  clearPoiRoute() {
+    if (!this.map || !this.mapLoaded) return;
+    const src = this.map.getSource('poi-route-source');
+    if (src) {
+      src.setData({ type: 'FeatureCollection', features: [] });
+    }
+    const banner = document.getElementById('map-alert-banner');
+    if (banner) banner.style.display = 'none';
   }
 
   drawFftSpectrum() {

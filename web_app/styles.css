@@ -1379,4 +1379,257 @@ html, body {
   line-height: 1.35;
 }
 
+/* ==========================================================================
+   POI Destination Selector & Trace Toggle Styling (Task 1.6 & 1.7)
+   ========================================================================== */
+.poi-select {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  outline: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.poi-select:hover, .poi-select:focus {
+  border-color: var(--accent);
+  background: var(--bg-subtle);
+}
+
+.btn-trace-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-color: rgba(56, 189, 248, 0.3) !important;
+}
+
+.btn-trace-toggle.active {
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--accent);
+  border-color: var(--accent) !important;
+}
+
+.trace-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: pulse-dot 1.5s infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+/* ==========================================================================
+   Interactive Cockpit Controls Section (Task 1.7)
+   ========================================================================== */
+.controls-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Lean Lightbar / Gauge */
+.lean-lightbar-container {
+  background: #0d1015;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.lean-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.lean-title {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.lean-angle-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.lean-bar-track {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  background: #161b22;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.lean-bar-center-line {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: rgba(241, 243, 247, 0.4);
+  transform: translateX(-50%);
+  z-index: 2;
+}
+
+.lean-bar-fill-left {
+  position: absolute;
+  right: 50%;
+  top: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #f59e0b, #ef4444);
+  transition: width 0.05s linear;
+}
+
+.lean-bar-fill-right {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8, #10b981);
+  transition: width 0.05s linear;
+}
+
+.lean-pointer {
+  position: absolute;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  background: #ffffff;
+  border-radius: 2px;
+  box-shadow: 0 0 4px #ffffff;
+  transform: translateX(-50%);
+  z-index: 3;
+  transition: left 0.05s linear;
+}
+
+.lean-labels {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.lean-mode-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.lean-mode-badge.disabled {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--error);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* Slider Controls */
+.slider-control-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.slider-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.slider-title {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.slider-val-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--accent-muted);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.control-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: var(--bg-hover);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.control-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 5px rgba(56, 189, 248, 0.6);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.control-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.25);
+}
+
+.slider-scale-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8.5px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+/* ==========================================================================
+   Three-Trace Deck Channel Badges & Details (Task 1.6)
+   ========================================================================== */
+.trace-channels {
+  display: flex;
+  gap: 4px;
+}
+
+.ch-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.ch-ax { background: rgba(56, 189, 248, 0.18); color: #38bdf8; }
+.ch-ay { background: rgba(245, 158, 11, 0.18); color: #f59e0b; }
+.ch-gz { background: rgba(192, 132, 252, 0.18); color: #c084fc; }
+
+.trace-col {
+  background: #0d1015;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
 
