@@ -33,6 +33,10 @@ class TrueTrackCockpit {
     this.mapLoaded = false;
     this.drawerOpen = false;
     this.manualGpsKill = false;
+    this.manualKillStartIdx = null;
+    this.manualKillStartTime = null;
+    this.manualRestoreStartTime = null;
+    this.manualRestoreStartIdx = null;
     this.highVibrationInjected = false;
     this.voiceEnabled = true;
     this.isDemoMode = false;
@@ -343,9 +347,25 @@ class TrueTrackCockpit {
     if (btnKillGps) {
       btnKillGps.addEventListener('click', () => {
         this.manualGpsKill = !this.manualGpsKill;
+        const curIdx = Math.floor(this.currentIndex);
+        const curTime = this.telemetry[curIdx] ? this.telemetry[curIdx].t : 0;
+
+        if (this.manualGpsKill) {
+          this.manualKillStartIdx = curIdx;
+          this.manualKillStartTime = curTime;
+          this.manualRestoreStartTime = null;
+          this.manualRestoreStartIdx = null;
+        } else {
+          this.manualRestoreStartTime = curTime;
+          this.manualRestoreStartIdx = curIdx;
+        }
+
         btnKillGps.classList.toggle('active', this.manualGpsKill);
         btnKillGps.textContent = this.manualGpsKill ? 'Restore GPS' : 'Kill GPS';
         this.playTone(this.manualGpsKill ? 220 : 660, 'triangle', 0.2);
+        this.lastRenderedIdx = -1;
+        this.updateHUD();
+        this.render();
       });
     }
 
@@ -598,11 +618,25 @@ class TrueTrackCockpit {
     // Reflect live blackout toggled from physical phone button
     if (data.blackout !== undefined && data.blackout !== this.manualGpsKill) {
       this.manualGpsKill = data.blackout;
+      const curIdx = Math.floor(this.currentIndex);
+      const curTime = this.telemetry[curIdx] ? this.telemetry[curIdx].t : 0;
+      if (this.manualGpsKill) {
+        this.manualKillStartIdx = curIdx;
+        this.manualKillStartTime = curTime;
+        this.manualRestoreStartTime = null;
+        this.manualRestoreStartIdx = null;
+      } else {
+        this.manualRestoreStartTime = curTime;
+        this.manualRestoreStartIdx = curIdx;
+      }
       const btnKill = document.getElementById('btn-kill-gps');
       if (btnKill) {
         btnKill.classList.toggle('active', this.manualGpsKill);
         btnKill.textContent = this.manualGpsKill ? 'Restore GPS' : 'Kill GPS';
       }
+      this.lastRenderedIdx = -1;
+      this.updateHUD();
+      this.render();
     }
   }
 
@@ -711,14 +745,128 @@ class TrueTrackCockpit {
   }
 
   /* ========================================================================
-     7. Telemetry & Hero Readout Updates
+     7. Dynamic Blackout & Coordinate Estimator
+     ======================================================================== */
+  getFrameState(d, index) {
+    if (!d) return null;
+    const isScheduledBO = d.is_blackout === 1;
+
+    let isManualBO = false;
+    let manualElapsedSec = 0;
+    let inSigmoidRestore = false;
+    let restoreAlpha = 1.0;
+
+    if (this.manualGpsKill && this.manualKillStartTime !== null) {
+      if (index >= this.manualKillStartIdx) {
+        isManualBO = true;
+        manualElapsedSec = Math.max(0, d.t - this.manualKillStartTime);
+      }
+    } else if (!this.manualGpsKill && this.manualRestoreStartTime !== null && this.manualKillStartTime !== null) {
+      if (index >= this.manualKillStartIdx) {
+        const timeSinceRestore = d.t - this.manualRestoreStartTime;
+        if (timeSinceRestore >= 0 && timeSinceRestore <= 3.0) {
+          inSigmoidRestore = true;
+          // Sigmoid blend factor: alpha smoothly goes from 0 (diverged) to 1 (restored)
+          restoreAlpha = 1.0 / (1.0 + Math.exp(-3.0 * (timeSinceRestore - 1.5)));
+          manualElapsedSec = Math.max(0, this.manualRestoreStartTime - this.manualKillStartTime);
+        }
+      }
+    }
+
+    const isBlackout = isScheduledBO || isManualBO || inSigmoidRestore;
+
+    // 1. Calculate Legacy Error and Coordinates
+    let errLegacy = 0.18;
+    let legCoord = d.gt;
+
+    if (isScheduledBO && !isManualBO && !inSigmoidRestore) {
+      errLegacy = d.err_naive_m;
+      legCoord = d.naive;
+    } else if (isManualBO || inSigmoidRestore) {
+      // Dynamic classical double integration quadratic error: e(dt) = 0.2 + 0.055*dt^2 + 0.15*dt
+      let rawDynErr = Math.min(140.0, 0.2 + 0.055 * Math.pow(manualElapsedSec, 2) + 0.15 * manualElapsedSec);
+      if (inSigmoidRestore) {
+        rawDynErr = (1.0 - restoreAlpha) * rawDynErr + restoreAlpha * 0.18;
+      }
+      errLegacy = rawDynErr;
+
+      // Project lateral divergence perpendicular to vehicle heading
+      const headingRad = (d.heading_deg || 45.0) * (Math.PI / 180.0);
+      const latOffsetM = Math.max(0, rawDynErr - 0.18);
+      // Perpendicular lateral vector (pointing right from heading)
+      const dEastM = latOffsetM * Math.cos(headingRad);
+      const dNorthM = -latOffsetM * Math.sin(headingRad);
+      const dLat = dNorthM / 110600.0;
+      const dLon = dEastM / (111320.0 * Math.cos(d.gt[0] * (Math.PI / 180.0)));
+
+      if (inSigmoidRestore) {
+        const divergedLat = d.gt[0] + dLat;
+        const divergedLon = d.gt[1] + dLon;
+        legCoord = [
+          (1.0 - restoreAlpha) * divergedLat + restoreAlpha * d.gt[0],
+          (1.0 - restoreAlpha) * divergedLon + restoreAlpha * d.gt[1]
+        ];
+      } else {
+        legCoord = [d.gt[0] + dLat, d.gt[1] + dLon];
+      }
+    }
+
+    // 2. Calculate TrueTrack Coordinates and Error
+    let errTT = 0.05;
+    let ttCoord = d.gt;
+
+    if (isBlackout) {
+      if (this.toggleNeural && this.toggleMap) {
+        // TrueTrack Full Stack: Locked to road manifold
+        if (!this.toggleLean && d.lean_deg && Math.abs(d.lean_deg) > 4.0) {
+          errTT = Math.min(5.93, 0.35 + 0.25 * Math.abs(d.lean_deg));
+          const headingRad = (d.heading_deg || 45.0) * (Math.PI / 180.0);
+          const dEastM = errTT * Math.cos(headingRad);
+          const dNorthM = -errTT * Math.sin(headingRad);
+          const dLat = dNorthM / 110600.0;
+          const dLon = dEastM / (111320.0 * Math.cos(d.gt[0] * (Math.PI / 180.0)));
+          ttCoord = [d.gt[0] + dLat, d.gt[1] + dLon];
+        } else {
+          errTT = isScheduledBO ? d.err_truetrack_m : (0.35 + 0.08 * Math.sin(manualElapsedSec * 2.0));
+          ttCoord = isScheduledBO ? ((!this.toggleSigmoid && d.truetrack_hardsnap) ? d.truetrack_hardsnap : d.truetrack) : d.gt;
+        }
+      } else if (!this.toggleNeural && this.toggleMap) {
+        errTT = isScheduledBO ? d.err_map_alone_m : Math.min(24.8, 1.8 + 0.45 * manualElapsedSec);
+        ttCoord = isScheduledBO ? d.map_alone : d.gt;
+      } else if (this.toggleNeural && !this.toggleMap) {
+        errTT = isScheduledBO ? d.err_neural_alone_m : Math.min(52.4, 0.5 + 1.16 * manualElapsedSec);
+        const headingRad = (d.heading_deg || 45.0) * (Math.PI / 180.0);
+        const dEastM = errTT * Math.cos(headingRad);
+        const dNorthM = -errTT * Math.sin(headingRad);
+        const dLat = dNorthM / 110600.0;
+        const dLon = dEastM / (111320.0 * Math.cos(d.gt[0] * (Math.PI / 180.0)));
+        ttCoord = [d.gt[0] + dLat, d.gt[1] + dLon];
+      } else {
+        errTT = errLegacy;
+        ttCoord = legCoord;
+      }
+    }
+
+    return {
+      isBlackout,
+      errLegacy,
+      errTT,
+      legCoord,
+      ttCoord,
+      manualElapsedSec: (isManualBO || inSigmoidRestore) ? manualElapsedSec : 0
+    };
+  }
+
+  /* ========================================================================
+     7b. Telemetry & Hero Readout Updates
      ======================================================================== */
   updateHUD() {
     const idx = Math.floor(this.currentIndex);
     const cur = this.telemetry[idx];
     if (!cur) return;
 
-    const isBlackout = cur.is_blackout === 1 || this.manualGpsKill;
+    const frame = this.getFrameState(cur, idx);
+    const isBlackout = frame.isBlackout;
 
     // 1. Update Video Scrubber Slider & Timestamp
     const slider = document.getElementById('timeline-slider');
@@ -759,12 +907,8 @@ class TrueTrackCockpit {
     const heroCaption = document.getElementById('hero-status-caption');
     const deltaChip = document.getElementById('hero-delta-chip');
 
-    const errLegacy = isBlackout ? cur.err_naive_m : 0.2;
-    let activeErr = cur.err_truetrack_m;
-    if (!this.toggleNeural && this.toggleMap) activeErr = cur.err_map_alone_m;
-    else if (this.toggleNeural && !this.toggleMap) activeErr = cur.err_neural_alone_m;
-    else if (!this.toggleNeural && !this.toggleMap) activeErr = cur.err_naive_m;
-    const errTT = isBlackout ? activeErr : 0.0;
+    const errLegacy = frame.errLegacy;
+    const errTT = frame.errTT;
 
     // Smooth count-up tween (200ms easing)
     const alpha = 0.28;
@@ -778,7 +922,7 @@ class TrueTrackCockpit {
     // Live Delta Ratio Chip
     if (deltaChip) {
       if (isBlackout) {
-        const ratio = errLegacy / Math.max(0.08, activeErr);
+        const ratio = errLegacy / Math.max(0.08, errTT);
         if (ratio >= 1.5) {
           deltaChip.textContent = `${Math.round(ratio)}× lower`;
         } else {
@@ -794,7 +938,9 @@ class TrueTrackCockpit {
       const curS = Math.floor(cur.t % 60);
       const timeStr = `${curM}:${curS < 10 ? '0' : ''}${curS}`;
       if (isBlackout) {
-        const elapsed = Math.max(0, Math.floor(cur.t - 40.0));
+        const elapsed = frame.manualElapsedSec > 0
+          ? Math.floor(frame.manualElapsedSec)
+          : Math.max(0, Math.floor(cur.t - 40.0));
         heroCaption.textContent = `at ${timeStr} \u00b7 blackout, ${elapsed} s in`;
       } else {
         heroCaption.textContent = `at ${timeStr} \u00b7 GPS locked (both \u2248 0)`;
@@ -833,31 +979,15 @@ class TrueTrackCockpit {
     const nxt = this.telemetry[i1] || cur;
     if (!cur) return;
 
-    const isBlackout = cur.is_blackout === 1 || this.manualGpsKill;
-
-    // Helper to get active coordinate for any frame
-    const getActiveCoord = (d) => {
-      if (this.toggleNeural && this.toggleMap) {
-        return (!this.toggleSigmoid && d.truetrack_hardsnap) ? d.truetrack_hardsnap : d.truetrack;
-      } else if (!this.toggleNeural && this.toggleMap) {
-        return d.map_alone;
-      } else if (this.toggleNeural && !this.toggleMap) {
-        return d.neural_alone;
-      } else {
-        return d.naive;
-      }
-    };
+    const curFrame = this.getFrameState(cur, i0);
+    const nxtFrame = this.getFrameState(nxt, i1);
 
     // Sub-frame continuous linear interpolation (LERP) for silky-smooth 60 FPS motion
-    const curTT = getActiveCoord(cur);
-    const nxtTT = getActiveCoord(nxt);
-    const ttLat = curTT[0] + (nxtTT[0] - curTT[0]) * frac;
-    const ttLng = curTT[1] + (nxtTT[1] - curTT[1]) * frac;
+    const ttLat = curFrame.ttCoord[0] + (nxtFrame.ttCoord[0] - curFrame.ttCoord[0]) * frac;
+    const ttLng = curFrame.ttCoord[1] + (nxtFrame.ttCoord[1] - curFrame.ttCoord[1]) * frac;
 
-    const curLeg = isBlackout ? cur.naive : cur.gt;
-    const nxtLeg = isBlackout ? nxt.naive : nxt.gt;
-    const legLat = curLeg[0] + (nxtLeg[0] - curLeg[0]) * frac;
-    const legLng = curLeg[1] + (nxtLeg[1] - curLeg[1]) * frac;
+    const legLat = curFrame.legCoord[0] + (nxtFrame.legCoord[0] - curFrame.legCoord[0]) * frac;
+    const legLng = curFrame.legCoord[1] + (nxtFrame.legCoord[1] - curFrame.legCoord[1]) * frac;
 
     const curGT = cur.gt;
     const nxtGT = nxt.gt;
@@ -905,10 +1035,9 @@ class TrueTrackCockpit {
         const ttHistory = [];
         for (let i = 0; i <= i0; i++) {
           const d = this.telemetry[i];
-          const bo = d.is_blackout === 1 || this.manualGpsKill;
-          legHistory.push(bo ? [d.naive[1], d.naive[0]] : [d.gt[1], d.gt[0]]);
-          const p = getActiveCoord(d);
-          ttHistory.push([p[1], p[0]]);
+          const f = this.getFrameState(d, i);
+          legHistory.push([f.legCoord[1], f.legCoord[0]]);
+          ttHistory.push([f.ttCoord[1], f.ttCoord[0]]);
         }
         // Connect history seamlessly to current interpolated tip
         ttHistory.push([ttLng, ttLat]);
@@ -1094,9 +1223,8 @@ class TrueTrackCockpit {
     for (let i = 0; i <= currentIdx; i++) {
       const x = getX(i);
       const d = this.telemetry[i];
-      const isBO = d.is_blackout === 1 || this.manualGpsKill;
-      const err = isBO ? d.err_naive_m : 0.18;
-      const y = getLogY(err);
+      const f = this.getFrameState(d, i);
+      const y = getLogY(f.errLegacy);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
       if (i === currentIdx) lastLegacyY = y;
@@ -1124,15 +1252,8 @@ class TrueTrackCockpit {
       for (let i = 0; i <= currentIdx; i++) {
         const x = getX(i);
         const d = this.telemetry[i];
-        const isBO = d.is_blackout === 1 || this.manualGpsKill;
-        let err = 0.1;
-        if (isBO) {
-          if (this.toggleNeural && this.toggleMap) err = d.err_truetrack_m;
-          else if (!this.toggleNeural && this.toggleMap) err = d.err_map_alone_m;
-          else if (this.toggleNeural && !this.toggleMap) err = d.err_neural_alone_m;
-          else err = d.err_naive_m;
-        }
-        ctx.lineTo(x, getLogY(err));
+        const f = this.getFrameState(d, i);
+        ctx.lineTo(x, getLogY(f.errTT));
       }
       ctx.lineTo(getX(currentIdx), padTop + plotH);
       ctx.closePath();
@@ -1152,17 +1273,8 @@ class TrueTrackCockpit {
     for (let i = 0; i <= currentIdx; i++) {
       const x = getX(i);
       const d = this.telemetry[i];
-      const isBO = d.is_blackout === 1 || this.manualGpsKill;
-      let err = 0.1;
-      if (isBO) {
-        if (this.toggleNeural && this.toggleMap) err = d.err_truetrack_m;
-        else if (!this.toggleNeural && this.toggleMap) err = d.err_map_alone_m;
-        else if (this.toggleNeural && !this.toggleMap) err = d.err_neural_alone_m;
-        else err = d.err_naive_m;
-      } else {
-        err = 0.1; // Locked to GPS
-      }
-      const y = getLogY(err);
+      const f = this.getFrameState(d, i);
+      const y = getLogY(f.errTT);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
       if (i === currentIdx) lastTTY = y;
@@ -1194,16 +1306,9 @@ class TrueTrackCockpit {
       const hoverIdx = Math.min(total - 1, Math.max(0, Math.round(hoverRatio * (total - 1))));
       const hoverData = this.telemetry[hoverIdx];
       if (this.chartTooltip && hoverData && this.chartMousePos) {
-        const isBO = hoverData.is_blackout === 1 || this.manualGpsKill;
-        const legErr = isBO ? hoverData.err_naive_m.toFixed(1) : '0.2';
-        let ttErrVal = 0.0;
-        if (isBO) {
-          if (this.toggleNeural && this.toggleMap) ttErrVal = hoverData.err_truetrack_m;
-          else if (!this.toggleNeural && this.toggleMap) ttErrVal = hoverData.err_map_alone_m;
-          else if (this.toggleNeural && !this.toggleMap) ttErrVal = hoverData.err_neural_alone_m;
-          else ttErrVal = hoverData.err_naive_m;
-        }
-        const ttErr = isBO ? ttErrVal.toFixed(1) : '0.0';
+        const f = this.getFrameState(hoverData, hoverIdx);
+        const legErr = f.errLegacy.toFixed(1);
+        const ttErr = f.errTT.toFixed(1);
         this.chartTooltip.innerHTML = `t=${hoverData.t.toFixed(1)}s &bull; <span style="color:#ef4444">Legacy: ${legErr}m</span> &bull; <span style="color:#38bdf8">TT: ${ttErr}m</span>`;
         this.chartTooltip.style.display = 'block';
         this.chartTooltip.style.left = `${Math.min(w - 180, Math.max(10, this.chartMousePos.x + 10))}px`;
@@ -1246,9 +1351,10 @@ class TrueTrackCockpit {
       ctx.strokeStyle = '#ef4444';
       ctx.lineWidth = 1.5;
       slice.forEach((d, i) => {
+        const realIdx = start + i;
+        const f = this.getFrameState(d, realIdx);
         const x = (i / (len - 1)) * w;
-        const err = (d.is_blackout === 1 || this.manualGpsKill) ? d.err_naive_m : 0.2;
-        const norm = Math.min(1.0, err / 120.0);
+        const norm = Math.min(1.0, f.errLegacy / 120.0);
         const y = h - 2 - norm * (h - 4);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -1266,15 +1372,10 @@ class TrueTrackCockpit {
       ctx.strokeStyle = '#38bdf8';
       ctx.lineWidth = 1.5;
       slice.forEach((d, i) => {
+        const realIdx = start + i;
+        const f = this.getFrameState(d, realIdx);
         const x = (i / (len - 1)) * w;
-        let err = 0.0;
-        if (d.is_blackout === 1 || this.manualGpsKill) {
-          if (this.toggleNeural && this.toggleMap) err = d.err_truetrack_m;
-          else if (!this.toggleNeural && this.toggleMap) err = d.err_map_alone_m;
-          else if (this.toggleNeural && !this.toggleMap) err = d.err_neural_alone_m;
-          else err = d.err_naive_m;
-        }
-        const norm = Math.min(1.0, err / 5.0); // 0 to 5m scale
+        const norm = Math.min(1.0, f.errTT / 5.0); // 0 to 5m scale
         const y = h - 2 - norm * (h - 4);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
