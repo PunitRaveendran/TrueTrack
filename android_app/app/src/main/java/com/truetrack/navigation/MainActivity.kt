@@ -1,7 +1,11 @@
 package com.truetrack.navigation
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.DashPathEffect
+import android.graphics.Paint
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -11,14 +15,26 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.text.format.Formatter
 import android.util.Log
+import android.view.View
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.TextView
-import android.widget.ViewAnimator
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import org.json.JSONObject
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.XYTileSource
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.util.MapTileIndex
+import org.osmdroid.views.CustomZoomButtonsController
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
 import java.io.InputStream
 import java.nio.FloatBuffer
 import java.util.Locale
@@ -29,7 +45,8 @@ import kotlin.math.max
  * TrueTrack - Android Navigation Instrument Activity
  *
  * Runs high-rate 50 Hz sensor acquisition, continuous lean-angle estimation,
- * local Snapdragon NPU inference, and dual-screen telemetry broadcasting.
+ * local Snapdragon NPU inference, dual-screen telemetry broadcasting,
+ * and high-contrast dark-mode OpenStreetMap real-time dead reckoning.
  */
 class MainActivity : AppCompatActivity(), SensorEventListener {
 
@@ -78,6 +95,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var tvLeanAngle: TextView
     private lateinit var tvLeanDirection: TextView
     private lateinit var tvYawRate: TextView
+    private lateinit var tvLateralConstraint: TextView
     private lateinit var tvGpsStatus: TextView
     private lateinit var tvBlackoutTimer: TextView
     private lateinit var tvDriftRate: TextView
@@ -87,15 +105,50 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var btnToggleVoice: Button
     private lateinit var btnToggleLeanCorrection: Button
 
+    // Map & Dead Reckoning Navigation View
+    private lateinit var mapView: MapView
+    private lateinit var vehicleMarker: Marker
+    private lateinit var btnRecenter: ImageButton
+    private lateinit var tvMapStatus: TextView
+    private lateinit var mapModeDot: View
+    private val trueTrackPolyline = Polyline()
+    private val driftPolyline = Polyline()
+    private val trueTrackPoints = mutableListOf<GeoPoint>()
+    private val driftPoints = mutableListOf<GeoPoint>()
+
+    private var isAutoFollow = true
+    private var drLat = 17.4445
+    private var drLon = 78.3771
+    private var drHeadingDeg = 35.0
+    private var naiveLat = 17.4445
+    private var naiveLon = 78.3771
+    private var naiveHeadingDeg = 35.0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         initViews()
+        requestLocationPermissions()
+        initMap()
         loadNormalizationStats()
         initOnnxModel()
         initAudioAndNetwork()
         initSensors()
+    }
+
+    private fun requestLocationPermissions() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                ),
+                1001
+            )
+        }
     }
 
     private fun initViews() {
@@ -103,6 +156,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         tvLeanAngle = findViewById(R.id.tvLeanAngle)
         tvLeanDirection = findViewById(R.id.tvLeanDirection)
         tvYawRate = findViewById(R.id.tvYawRate)
+        tvLateralConstraint = findViewById(R.id.tvLateralConstraint)
         tvGpsStatus = findViewById(R.id.tvGpsStatus)
         tvBlackoutTimer = findViewById(R.id.tvBlackoutTimer)
         tvDriftRate = findViewById(R.id.tvDriftRate)
@@ -111,6 +165,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         btnKillGps = findViewById(R.id.btnKillGps)
         btnToggleVoice = findViewById(R.id.btnToggleVoice)
         btnToggleLeanCorrection = findViewById(R.id.btnToggleLeanCorrection)
+
+        mapView = findViewById(R.id.mapView)
+        btnRecenter = findViewById(R.id.btnRecenter)
+        tvMapStatus = findViewById(R.id.tvMapStatus)
+        mapModeDot = findViewById(R.id.mapModeDot)
 
         btnKillGps.setOnClickListener { toggleGpsBlackout() }
 
@@ -123,6 +182,72 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             useLeanCorrection = !useLeanCorrection
             btnToggleLeanCorrection.text = if (useLeanCorrection) "LEAN NHC: ACTIVE" else "LEAN NHC: OFF"
             btnToggleLeanCorrection.setTextColor(if (useLeanCorrection) Color.parseColor("#10B981") else Color.parseColor("#EF4444"))
+        }
+
+        btnRecenter.setOnClickListener {
+            isAutoFollow = true
+            mapView.controller.animateTo(vehicleMarker.position)
+        }
+    }
+
+    private fun initMap() {
+        try {
+            Configuration.getInstance().userAgentValue = packageName
+
+            // Carto Dark Matter - Night navigation theme matching Google Maps dark mode
+            val cartoDark = object : XYTileSource(
+                "CartoDark",
+                0, 19, 256, ".png",
+                arrayOf(
+                    "https://a.basemaps.cartocdn.com/rastertiles/dark_all/",
+                    "https://b.basemaps.cartocdn.com/rastertiles/dark_all/",
+                    "https://c.basemaps.cartocdn.com/rastertiles/dark_all/"
+                )
+            ) {
+                override fun getTileURLString(pMapTileIndex: Long): String {
+                    return baseUrl + MapTileIndex.getZoom(pMapTileIndex) + "/" +
+                            MapTileIndex.getX(pMapTileIndex) + "/" +
+                            MapTileIndex.getY(pMapTileIndex) + mImageFilenameEnding
+                }
+            }
+            mapView.setTileSource(cartoDark)
+        } catch (e: Exception) {
+            mapView.setTileSource(TileSourceFactory.MAPNIK)
+        }
+
+        mapView.setMultiTouchControls(true)
+        mapView.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+        mapView.controller.setZoom(17.5)
+
+        val startPoint = GeoPoint(drLat, drLon)
+        mapView.controller.setCenter(startPoint)
+
+        // Trajectory Polylines
+        // 1. TrueTrack Neural Dead-Reckoning: Glowing Electric Blue
+        trueTrackPolyline.outlinePaint.color = Color.parseColor("#38BDF8")
+        trueTrackPolyline.outlinePaint.strokeWidth = 9f
+        trueTrackPolyline.outlinePaint.strokeCap = Paint.Cap.ROUND
+        mapView.overlays.add(trueTrackPolyline)
+
+        // 2. Naive uncorrected IMU Drift during Blackout: Alert Red (Dashed)
+        driftPolyline.outlinePaint.color = Color.parseColor("#EF4444")
+        driftPolyline.outlinePaint.strokeWidth = 5f
+        driftPolyline.outlinePaint.pathEffect = DashPathEffect(floatArrayOf(20f, 15f), 0f)
+        driftPolyline.outlinePaint.strokeCap = Paint.Cap.ROUND
+        mapView.overlays.add(driftPolyline)
+
+        // Vehicle Navigation Arrow Marker
+        vehicleMarker = Marker(mapView)
+        vehicleMarker.icon = ContextCompat.getDrawable(this, R.drawable.ic_navigation_arrow)
+        vehicleMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+        vehicleMarker.position = startPoint
+        vehicleMarker.rotation = drHeadingDeg.toFloat()
+        mapView.overlays.add(vehicleMarker)
+
+        // Disengage auto-follow if user manually drags or touches the map
+        mapView.setOnTouchListener { _, _ ->
+            isAutoFollow = false
+            false
         }
     }
 
@@ -138,34 +263,32 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             }
             Log.i("MainActivity", "Successfully loaded normalization stats")
         } catch (e: Exception) {
-            Log.w("MainActivity", "Using default normalization stats: ${e.message}")
+            Log.e("MainActivity", "Error reading norm_stats.json, defaulting to standard weights", e)
         }
     }
 
     private fun initOnnxModel() {
         try {
             ortEnv = OrtEnvironment.getEnvironment()
+            val modelBytes = assets.open("truetrack_model.onnx").readBytes()
             val sessionOptions = OrtSession.SessionOptions().apply {
-                // Enable NNAPI Execution Provider for Snapdragon Hexagon NPU acceleration
                 try {
                     addNnapi()
-                    Log.i("MainActivity", "Hexagon NPU NNAPI execution provider enabled")
-                } catch (e: Exception) {
-                    Log.w("MainActivity", "NNAPI fallback to CPU: ${e.message}")
+                    Log.i("MainActivity", "Configured Qualcomm Hexagon NNAPI hardware acceleration")
+                } catch (nnapiErr: Exception) {
+                    Log.w("MainActivity", "NNAPI unavailable on this chip, falling back to CPU runtime", nnapiErr)
                 }
             }
-            val modelBytes = assets.open("truetrack_model.onnx").readBytes()
-            ortSession = ortEnv?.createSession(modelBytes, sessionOptions)
-            Log.i("MainActivity", "ONNX model loaded successfully (${modelBytes.size / 1024} KB)")
+            ortSession = ortEnv!!.createSession(modelBytes, sessionOptions)
+            Log.i("MainActivity", "TrueTrack ONNX model successfully initialized")
         } catch (e: Exception) {
-            Log.e("MainActivity", "Failed to load ONNX model", e)
+            Log.e("MainActivity", "Failed to initialize ONNX Runtime", e)
         }
     }
 
     private fun initAudioAndNetwork() {
         audioManager = AudioCueManager(this)
 
-        // Start Telemetry WebSocket Server on port 8765
         try {
             streamServer = TelemetryStreamServer(8765)
             streamServer?.start()
@@ -177,10 +300,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             } else {
                 "localhost"
             }
-            tvServerStatus.text = "ws://$ipString:8765"
+            tvServerStatus.text = ":8765"
         } catch (e: Exception) {
             Log.e("MainActivity", "Failed to start telemetry stream server", e)
-            tvServerStatus.text = "ws://*:8765 (off)"
+            tvServerStatus.text = ":8765 (off)"
         }
     }
 
@@ -290,7 +413,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         val leanDeg = Math.toDegrees(currentPhiRad.toDouble()).toFloat()
 
-        // Update UI
+        // Update UI & Map
         runOnUiThread {
             updateDashboard(speedKmh, yawRateDeg, leanDeg, axIn, ayIn, azIn)
         }
@@ -337,6 +460,61 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
 
         tvRawImu.text = String.format(Locale.US, "IMU 50Hz: ax=%.2f ay_derolled=%.2f az=%.2f | NPU: %.1fms", ax, ay, az, lastNpuLatencyMs)
+
+        // Update real-time map dead reckoning
+        updateMap(speedKmh, yawRateDeg)
+    }
+
+    private fun updateMap(speedKmh: Float, yawRateDeg: Float) {
+        val dt = 0.1 // 100ms inference step
+        val speedMs = speedKmh / 3.6
+        drHeadingDeg = (drHeadingDeg + yawRateDeg * dt) % 360.0
+        val headingRad = Math.toRadians(drHeadingDeg)
+
+        // 0.000009 degrees per meter at ~17.4° latitude
+        val dLat = speedMs * dt * Math.cos(headingRad) * 0.000009
+        val dLon = speedMs * dt * Math.sin(headingRad) * 0.000009
+
+        drLat += dLat
+        drLon += dLon
+        val currentPoint = GeoPoint(drLat, drLon)
+
+        trueTrackPoints.add(currentPoint)
+        if (trueTrackPoints.size > 300) trueTrackPoints.removeAt(0)
+        trueTrackPolyline.setPoints(trueTrackPoints)
+
+        if (isBlackout) {
+            // Simulate uncorrected raw IMU drift error (demonstrating why TrueTrack is needed)
+            naiveHeadingDeg = (naiveHeadingDeg + (yawRateDeg + 9.5f) * dt) % 360.0
+            val naiveRad = Math.toRadians(naiveHeadingDeg)
+            naiveLat += speedMs * 1.35 * dt * Math.cos(naiveRad) * 0.000009
+            naiveLon += speedMs * 1.35 * dt * Math.sin(naiveRad) * 0.000009
+            driftPoints.add(GeoPoint(naiveLat, naiveLon))
+            if (driftPoints.size > 300) driftPoints.removeAt(0)
+            driftPolyline.setPoints(driftPoints)
+
+            tvMapStatus.text = "GPS BLACKOUT • NEURAL DR ACTIVE"
+            tvMapStatus.setTextColor(Color.parseColor("#EF4444"))
+            mapModeDot.backgroundTintList = getColorStateList(R.color.alert_red)
+        } else {
+            naiveLat = drLat
+            naiveLon = drLon
+            naiveHeadingDeg = drHeadingDeg
+            driftPoints.clear()
+            driftPolyline.setPoints(driftPoints)
+
+            tvMapStatus.text = "LIVE NEURAL TRAJECTORY"
+            tvMapStatus.setTextColor(Color.parseColor("#38BDF8"))
+            mapModeDot.backgroundTintList = getColorStateList(R.color.status_green)
+        }
+
+        vehicleMarker.position = currentPoint
+        vehicleMarker.rotation = drHeadingDeg.toFloat()
+
+        if (isAutoFollow) {
+            mapView.controller.animateTo(currentPoint)
+        }
+        mapView.invalidate()
     }
 
     private fun toggleGpsBlackout() {
@@ -351,7 +529,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         } else {
             btnKillGps.text = "KILL GPS FIX (SIMULATE BLACKOUT)"
             btnKillGps.backgroundTintList = getColorStateList(R.color.alert_red)
-            tvGpsStatus.text = "GNSS: LOCKED (50 Hz SIM/SENSOR)"
+            tvGpsStatus.text = "GNSS: LOCKED (50 Hz SENSOR/SIM)"
             tvGpsStatus.setTextColor(Color.parseColor("#10B981"))
             audioManager.onGpsRestored()
         }
@@ -359,10 +537,27 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
+    override fun onResume() {
+        super.onResume()
+        if (::mapView.isInitialized) {
+            mapView.onResume()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (::mapView.isInitialized) {
+            mapView.onPause()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         sensorManager.unregisterListener(this)
         audioManager.shutdown()
+        if (::mapView.isInitialized) {
+            mapView.onDetach()
+        }
         try {
             streamServer?.stop()
             ortSession?.close()
