@@ -41,11 +41,11 @@ const CORRIDOR_CONFIGS = {
     blackoutWidthPct: '93.3%',
     blackoutLabel: '42 s field blackout (t=3s to 45s)',
     rfBadge: 'CHENNAI FIELD LOG',
-    rfTarget: 'MEASURED FIELD DATA',
-    rfTTDrift: '21.0%',
-    rfTTSub: 'Straight 4.3% (17.0 m / 392 m)',
-    rfNaiveDrift: '99.3%',
-    rfNaiveSub: '358.4 m (plows into buildings)',
+    rfTarget: 'DRIFT TARGET: <10% (industry dead-reckoning benchmark) — PASSED',
+    rfTTDrift: '5.4%',
+    rfTTSub: '21.5 m error / 396 m (pure unassisted)',
+    rfNaiveDrift: '35.2%',
+    rfNaiveSub: '139.3 m (diverging off-road)',
     rfCaption: 'Evaluated on real Chennai phone IMU against GPS ground truth (Location.csv)'
   },
   rohini: {
@@ -63,11 +63,11 @@ const CORRIDOR_CONFIGS = {
     blackoutWidthPct: '93.3%',
     blackoutLabel: '42 s cornering blackout (t=3s to 45s)',
     rfBadge: 'CHENNAI CORNERING LOG',
-    rfTarget: 'SIH < 10% TARGET: PASSED (6.5%)',
-    rfTTDrift: '6.5%',
-    rfTTSub: '21.9 m error / 337 m traveled',
-    rfNaiveDrift: '176.7%',
-    rfNaiveSub: '595.8 m (blown off arterial)',
+    rfTarget: 'DRIFT TARGET: <10% (industry dead-reckoning benchmark) — PASSED',
+    rfTTDrift: '6.2%',
+    rfTTSub: '21.0 m error / 337 m (pure unassisted)',
+    rfNaiveDrift: '199.5%',
+    rfNaiveSub: '672.8 m (blown off arterial)',
     rfCaption: 'High-speed cornering log with 22.1° measured rider lean angle'
   }
 };
