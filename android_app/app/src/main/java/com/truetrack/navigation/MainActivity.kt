@@ -3,6 +3,8 @@ package com.truetrack.navigation
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.Intent
+import android.net.Uri
 import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
@@ -10,10 +12,15 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.PowerManager
+import android.provider.Settings
 import android.os.SystemClock
 import android.text.format.Formatter
 import android.util.Log
@@ -81,6 +88,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private var accelSensor: Sensor? = null
     private var gyroSensor: Sensor? = null
+    private var locationManager: LocationManager? = null
+    private var locationUpdatesRegistered = false
+    private var gpsReacquisitionFixCount = 0
+    private var gpsReacquisitionCandidateLat = 0.0
+    private var gpsReacquisitionCandidateLon = 0.0
+    private var gpsReacquisitionCandidateTimeNs = 0L
+    private val gpsDistanceResult = FloatArray(1)
 
     // Latest Raw Sensor Readings
     private var rawAx = 0.0f
@@ -187,6 +201,63 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // Tunnel Sub-Segment
     private val tunnelWaypoints = corridorWaypoints.subList(10, 17)
 
+    private val liveLocationListener = object : LocationListener {
+        override fun onLocationChanged(location: Location) {
+            if (isDemoMode || isBlackout) return
+
+            if (blackoutStartTimeMs > 0L) {
+                val elapsedSinceBlackoutSec =
+                    ((SystemClock.elapsedRealtime() - blackoutStartTimeMs).coerceAtLeast(0L) / 1000.0)
+                val maxFromDrMeters = 20.0 + elapsedSinceBlackoutSec * 45.0
+                Location.distanceBetween(drLat, drLon, location.latitude, location.longitude, gpsDistanceResult)
+                if (gpsDistanceResult[0] > maxFromDrMeters) {
+                    gpsReacquisitionFixCount = 0
+                    Log.w("MainActivity", "Rejecting GPS reacquisition fix outside DR speed bound")
+                    return
+                }
+
+                if (gpsReacquisitionFixCount > 0) {
+                    Location.distanceBetween(
+                        gpsReacquisitionCandidateLat,
+                        gpsReacquisitionCandidateLon,
+                        location.latitude,
+                        location.longitude,
+                        gpsDistanceResult
+                    )
+                    val intervalSec =
+                        ((location.elapsedRealtimeNanos - gpsReacquisitionCandidateTimeNs).coerceAtLeast(0L) / 1_000_000_000.0)
+                    val maxBetweenFixesMeters = 8.0 + intervalSec * 45.0
+                    if (gpsDistanceResult[0] > maxBetweenFixesMeters) {
+                        gpsReacquisitionFixCount = 0
+                    }
+                }
+
+                gpsReacquisitionFixCount++
+                gpsReacquisitionCandidateLat = location.latitude
+                gpsReacquisitionCandidateLon = location.longitude
+                gpsReacquisitionCandidateTimeNs = location.elapsedRealtimeNanos
+                if (gpsReacquisitionFixCount < 3) return
+
+                blackoutStartTimeMs = 0L
+                gpsReacquisitionFixCount = 0
+                audioManager.onGpsRestored()
+                driftPoints.clear()
+                driftPolyline.setPoints(driftPoints)
+            }
+
+            drLat = location.latitude
+            drLon = location.longitude
+            if (location.hasBearing()) {
+                drHeadingDeg = ((location.bearing.toDouble() % 360.0) + 360.0) % 360.0
+            }
+        }
+
+        @Deprecated("Deprecated in Android")
+        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+
+        override fun onProviderEnabled(provider: String) = Unit
+        override fun onProviderDisabled(provider: String) = Unit
+    }
     // Current State Coordinates
     private var drLat = 17.443514
     private var drLon = 78.377107
@@ -200,6 +271,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         initViews()
         requestLocationPermissions()
+        startNavigationServiceIfPermitted()
+        updateGpsSubscription()
         preloadOfflineTiles()
         loadSimulationTelemetry()
         initMap()
@@ -209,6 +282,54 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         initSensors()
     }
 
+    private fun startNavigationServiceIfPermitted() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            ContextCompat.startForegroundService(this, Intent(this, NavigationForegroundService::class.java))
+            requestBatteryOptimizationExemption()
+        }
+    }
+
+    private fun requestBatteryOptimizationExemption() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+            try {
+                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Battery optimization exemption request unavailable", e)
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1001 && grantResults.any { it == PackageManager.PERMISSION_GRANTED }) {
+            startNavigationServiceIfPermitted()
+            updateGpsSubscription()
+        }
+    }
+    private fun updateGpsSubscription() {
+        if (isDemoMode || isBlackout) {
+            if (locationUpdatesRegistered) {
+                locationManager?.removeUpdates(liveLocationListener)
+                locationUpdatesRegistered = false
+            }
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
+
+        val manager = locationManager ?: (getSystemService(Context.LOCATION_SERVICE) as LocationManager).also { locationManager = it }
+        try {
+            if (!locationUpdatesRegistered && manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                manager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, liveLocationListener)
+                locationUpdatesRegistered = true
+            }
+        } catch (e: SecurityException) {
+            Log.w("MainActivity", "Location permission unavailable for live updates", e)
+        } catch (e: IllegalArgumentException) {
+            Log.w("MainActivity", "GPS provider unavailable", e)
+        }
+    }
     private fun requestLocationPermissions() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED) {
@@ -332,7 +453,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             } else {
                 btnDemoMode.text = "MODE: LIVE SENSOR"
                 btnDemoMode.setTextColor(Color.parseColor("#94A3B8"))
+                isBlackout = false
+                blackoutStartTimeMs = 0L
+                gpsReacquisitionFixCount = 0
             }
+            updateGpsSubscription()
         }
 
         btnToggleVoice.setOnClickListener {
@@ -806,11 +931,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     private fun toggleGpsBlackout() {
         isBlackout = !isBlackout
+        updateGpsSubscription()
         if (isBlackout) {
             blackoutStartTimeMs = SystemClock.elapsedRealtime()
+            gpsReacquisitionFixCount = 0
             audioManager.onBlackoutEntered()
         } else {
-            audioManager.onGpsRestored()
+            if (isDemoMode || blackoutStartTimeMs == 0L) {
+                audioManager.onGpsRestored()
+                blackoutStartTimeMs = 0L
+            }
             driftPoints.clear()
             driftPolyline.setPoints(driftPoints)
         }
@@ -835,6 +965,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onDestroy() {
         super.onDestroy()
         sensorManager.unregisterListener(this)
+        locationManager?.removeUpdates(liveLocationListener)
         sensorThread?.quitSafely()
         inferenceExecutor.shutdown()
         audioManager.shutdown()
@@ -850,3 +981,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 }
+
+
+
+

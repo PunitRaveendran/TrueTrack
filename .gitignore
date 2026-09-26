@@ -57,3 +57,9 @@ local.properties
 
 # Local nested clone of this repository (never commit)
 TrueTrack/
+
+# Keep the navigation foreground service visible to Git
+!android_app/app/src/main/java/com/truetrack/
+!android_app/app/src/main/java/com/truetrack/navigation/
+!android_app/app/src/main/java/com/truetrack/navigation/NavigationForegroundService.kt
+

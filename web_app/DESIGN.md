@@ -78,3 +78,27 @@ Strict visual layer stacking so TrueTrack ALWAYS renders with dominance over leg
 - **Grid**: 8px spatial grid with 4px sub-grid (`4px`, `8px`, `12px`, `16px`, `20px`, `24px`).
 - **Radii**: `6px` for buttons and controls; `10px` for panels and cards.
 - **Iconography**: Clean 1.5px stroke inline SVGs, zero external font icons.
+
+---
+
+## 6. Three-Trace Live Cockpit Strip (Priority 1, Spec §6)
+
+The left column is a vertical stack: the map puck (Panel C, Z 400-800 above) plus two **always-visible**
+strip panels that are deliberately *not* gated behind the diagnostics drawer, so all three panels are on
+screen simultaneously during live playback.
+
+| Panel | Signal | Stroke | Nominal scale | Character |
+| :--- | :--- | :--- | :--- | :--- |
+| **A - Raw IMU input** | `raw_imu_ax` | `#8b94a2` slate, 1.0px | ±5 m/s² | Chaotic, vibration-visible |
+| | `raw_imu_ay` | `#e2e8f0` neutral white, 1.0px | ±5 m/s² | Chaotic |
+| | `raw_imu_gz` | `#d97706` amber, 1.0px | ±0.15 rad/s | Chaotic (engine harmonics) |
+| **B - NPU output** | `pred_speed_kmh` | `#38bdf8` TrueTrack blue, 1.4px | 0-50 km/h lane | Smooth regression |
+| | `pred_yaw_deg_s` | `#10b981` success green, 1.4px | ±3 °/s lane | Smooth regression |
+
+- **Shared time axis:** both panels reuse the drift chart's insets (38px left / 64px right), its
+  0-130 s domain, its 15 s tick grid and its live needle, so Panels A, B and C read as one synchronized instrument.
+- **Scale provenance:** nominal ranges are derived from the recorded telemetry (ax/ay `|p95| ≈ 3.5 m/s²`,
+  gz `|p95| ≈ 0.066 rad/s`, speed `1.6-45.8 km/h`, yaw `-2.7 → 1.8 °/s`) so no trace sits flat or pinned to the rails.
+- **Colour discipline:** the reserved semantics stay intact (blue = TrueTrack result, red = legacy failure,
+  amber = underpass/vibration), so accent blue and success green are used only on the *neural output* panel.
+- **Redraw policy:** one redraw per new 10 Hz telemetry sample (dirty-check key), never per 60 fps frame.

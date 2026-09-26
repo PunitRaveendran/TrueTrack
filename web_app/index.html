@@ -6,7 +6,7 @@
   <title>TrueTrack | Neural-Inertial Navigation Instrument</title>
   <meta name="description" content="On-device neural-inertial dead reckoning and offline map-matching navigation instrument for GPS-denied urban corridors.">
   <link rel="stylesheet" href="lib/maplibre-gl.css">
-  <link rel="stylesheet" href="styles.css?v=round3_v3">
+  <link rel="stylesheet" href="styles.css?v=round3_p1">
 </head>
 <body class="instrument-root">
 
@@ -67,7 +67,8 @@
   <!-- Main Viewport Layout (1920x1080 Zero-Scroll Grid) -->
   <main class="viewport-layout">
 
-    <!-- Left Column: Edge-to-Edge Map -->
+    <!-- Left Column: Edge-to-Edge Map + always-visible three-trace strip -->
+    <section class="map-column">
     <section class="map-viewport-container">
       <div id="maplibre-map" class="map-canvas"></div>
       <div class="map-vignette-overlay" pointer-events="none"></div>
@@ -91,6 +92,53 @@
         <div class="legend-row"><span class="legend-swatch swatch-gt"></span> Ground truth / full corridor</div>
         <div class="legend-row"><span class="legend-swatch swatch-tunnel"></span> 45 s underpass zone</div>
       </div>
+    </section>
+
+    <!-- ==================================================================
+         PRIORITY 1: THREE-TRACE LIVE COCKPIT VISUALIZATION (Spec section 6)
+         Panel A (raw IMU input, chaotic) and Panel B (NPU output, smooth) live
+         outside the diagnostics drawer, so all three panels (A, B and the map
+         puck) are visible simultaneously during live playback. Both canvases
+         share the drift chart's time domain (0-130 s), 15 s tick grid and the
+         live playback needle.
+         ================================================================== -->
+    <section class="trace-strip" id="trace-strip">
+
+      <!-- Panel A: raw 6-axis IMU input, 3 channels in 3 colours (vibration-visible) -->
+      <div class="trace-panel">
+        <div class="trace-head">
+          <span class="trace-title">Panel A &mdash; Raw IMU input</span>
+          <span class="trace-badge trace-badge-chaotic">raw sensor stream &bull; chaotic</span>
+          <span class="trace-scales">ax, ay &plusmn;5 m/s&sup2; &bull; gz &plusmn;0.15 rad/s</span>
+          <div class="trace-legend">
+            <span class="trace-key"><i class="trace-swatch swatch-ax"></i>ax</span>
+            <span class="trace-key"><i class="trace-swatch swatch-ay"></i>ay</span>
+            <span class="trace-key"><i class="trace-swatch swatch-gz"></i>gz</span>
+          </div>
+        </div>
+        <canvas id="canvas-imu-trace" class="trace-canvas" width="1520" height="88"></canvas>
+      </div>
+
+      <!-- Panel B: neural NPU output, speed + yaw-rate regression (smooth) -->
+      <div class="trace-panel">
+        <div class="trace-head">
+          <span class="trace-title">Panel B &mdash; NPU output</span>
+          <span class="trace-badge trace-badge-neural">1D-CNN regression &bull; smooth</span>
+          <span class="trace-scales">speed 0&ndash;50 km/h &bull; yaw rate &plusmn;3 &deg;/s</span>
+          <div class="trace-legend">
+            <span class="trace-key"><i class="trace-swatch swatch-speed"></i>speed</span>
+            <span class="trace-key"><i class="trace-swatch swatch-yaw"></i>yaw</span>
+          </div>
+        </div>
+        <canvas id="canvas-npu-trace" class="trace-canvas" width="1520" height="88"></canvas>
+      </div>
+
+      <!-- Shared timeline footer (panel C is the map puck above) -->
+      <div class="trace-axis-footer">
+        <span class="trace-axis-note">Panel C: map puck above &bull; shared time axis with the drift chart (0&ndash;130 s &bull; 15 s ticks &bull; live needle)</span>
+        <span class="trace-clock" id="trace-clock">t = 0.0 s &bull; GPS locked</span>
+      </div>
+    </section>
     </section>
 
     <!-- Right Column: Precision Readouts & Controls -->
@@ -390,6 +438,6 @@
   <!-- Scripts: 100% Offline MapLibre GL & Engines -->
   <script src="lib/maplibre-gl.js"></script>
   <script src="js/corridor_data.js?v=round3_v3"></script>
-  <script src="js/navigation_engine.js?v=round3_v3"></script>
+  <script src="js/navigation_engine.js?v=round3_p1"></script>
 </body>
 </html>
