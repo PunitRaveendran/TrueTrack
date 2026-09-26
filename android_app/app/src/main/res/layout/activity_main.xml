@@ -61,7 +61,7 @@
                 android:id="@+id/viewStatusDot"
                 android:layout_width="12dp"
                 android:layout_height="12dp"
-                android:background="@drawable/ic_menu_compass"
+                android:background="@drawable/status_dot"
                 android:backgroundTint="@color/status_green" />
 
             <TextView
