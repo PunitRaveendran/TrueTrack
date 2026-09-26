@@ -63,3 +63,6 @@ TrueTrack/
 !android_app/app/src/main/java/com/truetrack/navigation/
 !android_app/app/src/main/java/com/truetrack/navigation/NavigationForegroundService.kt
 
+
+.chrome_tmp/
+.preview_cockpit.png
