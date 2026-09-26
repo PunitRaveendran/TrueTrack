@@ -54,3 +54,6 @@ local.properties
 
 # Large archive files (extracted directories are tracked directly)
 *.zip
+
+# Local nested clone of this repository (never commit)
+TrueTrack/
