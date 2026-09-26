@@ -8,6 +8,8 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.net.wifi.WifiManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.SystemClock
 import android.text.format.Formatter
 import android.util.Log
@@ -22,6 +24,8 @@ import org.json.JSONObject
 import java.io.InputStream
 import java.nio.FloatBuffer
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -78,6 +82,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var currentLon = 78.3771355
     private var currentHeadingRad = Math.toRadians(75.0)
     private var lastIntegrationTimeNs = 0L
+
+    // Dedicated Background Workers & Concurrency Isolation
+    private var sensorThread: HandlerThread? = null
+    private var sensorHandler: Handler? = null
+    private val inferenceExecutor = Executors.newSingleThreadExecutor()
+    private val isInferring = AtomicBoolean(false)
 
     // UI View References
     private lateinit var tvSpeed: TextView
@@ -197,9 +207,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
 
+        // Offload IMU polling onto a dedicated high-priority HandlerThread
+        sensorThread = HandlerThread("IMUSensorThread", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply {
+            start()
+            sensorHandler = Handler(looper)
+        }
+
         // 50 Hz target sampling interval = 20,000 microseconds
-        accelSensor?.let { sensorManager.registerListener(this, it, 20_000) }
-        gyroSensor?.let { sensorManager.registerListener(this, it, 20_000) }
+        sensorHandler?.let { handler ->
+            accelSensor?.let { sensorManager.registerListener(this, it, 20_000, handler) }
+            gyroSensor?.let { sensorManager.registerListener(this, it, 20_000, handler) }
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
@@ -250,34 +268,50 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         bufferHead = (bufferHead + 1) % windowSize
         samplesCollected++
 
-        // Run NPU inference every 10 samples (5 Hz) or whenever buffer is populated
+        // Run NPU inference every 10 samples (5 Hz) on dedicated background executor
         val now = SystemClock.elapsedRealtime()
         if (samplesCollected >= windowSize && now - lastInferenceTimeMs >= 100) {
             lastInferenceTimeMs = now
-            runInference(currentPhi, axIn, ayIn, azIn)
+            if (isInferring.compareAndSet(false, true)) {
+                // Snapshot ring buffer into flat array [1, 6, 50]
+                val snapshotBuffer = FloatArray(numChannels * windowSize)
+                for (c in 0 until numChannels) {
+                    for (i in 0 until windowSize) {
+                        val idx = (bufferHead + i) % windowSize
+                        snapshotBuffer[c * windowSize + i] = imuRingBuffer[c][idx]
+                    }
+                }
+                inferenceExecutor.execute {
+                    try {
+                        runInferenceBackground(snapshotBuffer, currentPhi, axIn, ayIn, azIn)
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Background inference failure", e)
+                    } finally {
+                        isInferring.set(false)
+                    }
+                }
+            }
         }
     }
 
-    private fun runInference(currentPhiRad: Float, axIn: Float, ayIn: Float, azIn: Float) {
+    private fun runInferenceBackground(
+        snapshotBuffer: FloatArray,
+        currentPhiRad: Float,
+        axIn: Float,
+        ayIn: Float,
+        azIn: Float
+    ) {
         val startTime = SystemClock.elapsedRealtimeNanos()
         var speedKmh = 40.0f
         var yawRateDeg = Math.toDegrees(rawGz.toDouble()).toFloat()
 
         if (ortSession != null && ortEnv != null) {
             try {
-                // Flatten rolling buffer in chronological order: [1, 6, 50]
-                val tensorBuffer = FloatBuffer.allocate(numChannels * windowSize)
-                for (c in 0 until numChannels) {
-                    for (i in 0 until windowSize) {
-                        val idx = (bufferHead + i) % windowSize
-                        tensorBuffer.put(imuRingBuffer[c][idx])
-                    }
-                }
-                tensorBuffer.rewind()
-
+                val tensorBuffer = FloatBuffer.wrap(snapshotBuffer)
                 val inputShape = longArrayOf(1, numChannels.toLong(), windowSize.toLong())
                 val inputTensor = OnnxTensor.createTensor(ortEnv, tensorBuffer, inputShape)
 
+                // ortSession.run is strictly serialized on inferenceExecutor (zero thread races)
                 val results = ortSession!!.run(mapOf(ortSession!!.inputNames.first() to inputTensor))
                 val output = (results[0].value as Array<FloatArray>)[0]
 
@@ -310,12 +344,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         val leanDeg = Math.toDegrees(currentPhiRad.toDouble()).toFloat()
 
-        // Update UI
+        // Update UI View Elements on Main Thread
         runOnUiThread {
             updateDashboard(speedKmh, yawRateDeg, leanDeg, axIn, ayIn, azIn)
         }
 
-        // Broadcast to Laptop Web Cockpit via WebSocket
+        // Broadcast to Laptop Web Cockpit via WebSocket (off-main-thread)
         streamServer?.broadcastTelemetry(
             timestampMs = System.currentTimeMillis(),
             speedKmh = speedKmh,
@@ -384,6 +418,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onDestroy() {
         super.onDestroy()
         sensorManager.unregisterListener(this)
+        sensorThread?.quitSafely()
+        inferenceExecutor.shutdown()
         audioManager.shutdown()
         try {
             streamServer?.stop()
