@@ -19,13 +19,10 @@ import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
- feature/android-app-setup-v2
-import android.os.PowerManager
-import android.provider.Settings
-=======
 import android.os.Looper
- main
+import android.os.PowerManager
 import android.os.SystemClock
+import android.provider.Settings
 import android.text.format.Formatter
 import android.util.Log
 import android.view.View
@@ -172,11 +169,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var isDemoMode = true
     private var prevBlackoutState = false
 
-    // Dedicated Background Workers & Concurrency Isolation
-    private var sensorThread: HandlerThread? = null
-    private var sensorHandler: Handler? = null
-    private val inferenceExecutor = Executors.newSingleThreadExecutor()
-    private val isInferring = AtomicBoolean(false)
 
     // UI View References
     private lateinit var tvSpeed: TextView
@@ -210,7 +202,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private val driftPoints = mutableListOf<GeoPoint>()
     private var isAutoFollow = true
 
-         feature/android-app-setup-v2
     // Real HITEC City Corridor Waypoints (from OSM GeoJSON ground truth)
     private val corridorWaypoints = listOf(
         GeoPoint(17.441434, 78.377145), // Raidurg Metro / Mindspace Junction
@@ -294,28 +285,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         override fun onProviderEnabled(provider: String) = Unit
         override fun onProviderDisabled(provider: String) = Unit
     }
-    // Current State Coordinates
-    private var drLat = 17.443514
-    private var drLon = 78.377107
-    private var drHeadingDeg = 359.0
-    private var naiveLat = 17.443514
-    private var naiveLon = 78.377107
-
-
- main
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         initViews()
         requestLocationPermissions()
-         feature/android-app-setup-v2
         startNavigationServiceIfPermitted()
         updateGpsSubscription()
-        preloadOfflineTiles()
-        loadSimulationTelemetry()
-
- main
         initMap()
         preloadOfflineTiles()
 
@@ -328,7 +305,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         initSensors()
     }
 
-        feature/android-app-setup-v2
     private fun startNavigationServiceIfPermitted() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             ContextCompat.startForegroundService(this, Intent(this, NavigationForegroundService::class.java))
@@ -394,6 +370,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         super.onDestroy()
         stopSimulationLoop()
         if (::sensorManager.isInitialized) sensorManager.unregisterListener(this)
+        locationManager?.removeUpdates(liveLocationListener)
         sensorThread?.quitSafely()
         inferenceExecutor.shutdown()
         if (::audioManager.isInitialized) audioManager.shutdown()
@@ -629,7 +606,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             .show()
     }
 
-        main
     private fun requestLocationPermissions() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED) {
@@ -696,28 +672,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         // Route selection dialog on clicking Demo Mode
         btnDemoMode.setOnClickListener {
-         feature/android-app-setup-v2
-            isDemoMode = !isDemoMode
-            trueTrackPoints.clear()
-            driftPoints.clear()
-            trueTrackPolyline.setPoints(trueTrackPoints)
-            driftPolyline.setPoints(driftPoints)
-
-            if (isDemoMode) {
-                simFrameIndex = 350
-                btnDemoMode.text = "MODE: SIMULATION"
-                btnDemoMode.setTextColor(Color.parseColor("#38BDF8"))
-            } else {
-                btnDemoMode.text = "MODE: LIVE SENSOR"
-                btnDemoMode.setTextColor(Color.parseColor("#94A3B8"))
-                isBlackout = false
-                blackoutStartTimeMs = 0L
-                gpsReacquisitionFixCount = 0
-            }
-            updateGpsSubscription()
-
             showRouteSelectionDialog()
- main
         }
 
         btnToggleVoice.setOnClickListener {
@@ -862,12 +817,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        // Offload IMU polling onto a dedicated high-priority HandlerThread
-        sensorThread = HandlerThread("IMUSensorThread", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply {
-            start()
-            sensorHandler = Handler(looper)
-        }
-
         // Offload IMU polling onto a dedicated high-priority HandlerThread
         sensorThread = HandlerThread("IMUSensorThread", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply {
             start()
@@ -1134,63 +1083,19 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         updateGpsSubscription()
         if (isBlackout) {
             blackoutStartTimeMs = SystemClock.elapsedRealtime()
-         feature/android-app-setup-v2
             gpsReacquisitionFixCount = 0
-            audioManager.onBlackoutEntered()
-        } else {
-            if (isDemoMode || blackoutStartTimeMs == 0L) {
-                audioManager.onGpsRestored()
-                blackoutStartTimeMs = 0L
-            }
-
             prevBlackoutState = true
             audioManager.onBlackoutEntered()
         } else {
             prevBlackoutState = false
             audioManager.onGpsRestored()
-         main
+            blackoutStartTimeMs = 0L
             driftPoints.clear()
             driftPolyline.setPoints(driftPoints)
         }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-
-         feature/android-app-setup-v2
-    override fun onResume() {
-        super.onResume()
-        if (::mapView.isInitialized) {
-            mapView.onResume()
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        if (::mapView.isInitialized) {
-            mapView.onPause()
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        sensorManager.unregisterListener(this)
-        locationManager?.removeUpdates(liveLocationListener)
-        sensorThread?.quitSafely()
-        inferenceExecutor.shutdown()
-        audioManager.shutdown()
-        if (::mapView.isInitialized) {
-            mapView.onDetach()
-        }
-        try {
-            streamServer?.stop()
-            ortSession?.close()
-            ortEnv?.close()
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Error closing resources", e)
-        }
-    }
-
- main
 }
 
 

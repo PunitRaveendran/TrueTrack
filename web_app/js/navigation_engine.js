@@ -1776,7 +1776,6 @@ class TrueTrackCockpit {
   }
 
   /* ========================================================================
-        feature/android-app-setup-v2
      9c. Priority 1 - Three-Trace Live Cockpit Strip
      Panel A = raw 3-channel IMU input (chaotic)  |  Panel B = NPU output (smooth)
      Both panels are drawn on the drift chart's time domain (0 -> 130 s), use the
@@ -2053,12 +2052,9 @@ class TrueTrackCockpit {
     });
   }
 
-  /* Drawer diagnostics: rolling 80-sample trace of all three raw IMU channels
-     (ax, ay, gz) in three colours, using the same nominal scales as Panel A. */
-
-     Three-Trace Synchronized View: Trace 1 (50 Hz Raw IMU Waveforms)
+  /* Drawer diagnostics: rolling sample trace of all three raw IMU channels
+     (ax, ay, gz) in three colours, using the same nominal scales as Panel A.
      ======================================================================== */
-         main
   drawImuWaveform(currentIdx) {
     if (!this.ctxWave || !this.canvasWave) return;
     const ctx = this.ctxWave;
@@ -2075,17 +2071,12 @@ class TrueTrackCockpit {
     ctx.lineTo(w, h / 2);
     ctx.stroke();
 
-         feature/android-app-setup-v2
-    // Rolling 80-sample window
-    const windowSize = 80;
-
-    const windowSize = this.sampleWindowSize || 50;
-        main
+    // Rolling sample window
+    const windowSize = this.sampleWindowSize || 80;
     const start = Math.max(0, currentIdx - windowSize);
     const slice = this.telemetry.slice(start, currentIdx + 1);
     if (slice.length < 2) return;
 
-        feature/android-app-setup-v2
     const mid = h / 2;
     const half = h / 2 - 6;
     this.imuChannelTable().forEach(ch => {
@@ -2418,7 +2409,6 @@ class TrueTrackCockpit {
     }
     const banner = document.getElementById('map-alert-banner');
     if (banner) banner.style.display = 'none';
-          main
   }
 
   /* ========================================================================

@@ -308,11 +308,7 @@ Then open your browser and navigate to:
 ### Phase 0 vs. On-Ground Scope Demarcation
 To maintain absolute intellectual honesty:
 * **Current Pre-Screening Repository (Phase 0):** Represents the **validated algorithmic prototype, trained neural network weights, empirical Chennai drive log analysis, and self-contained interactive evaluation console**.
-feature/android-app-setup-v2
   - **Hardware Testbed Demarcation:** Preliminary two-wheeler field recordings were gathered on an available Android test smartphone (Samsung Galaxy M35 5G) mounted on the handlebar prior to hackathon loaner arrival. Road dynamics (ISO 8608 roughness, 9g pothole shocks, 22.1° cornering bank) are vehicle-level physics that transfer across Android chassis.
-=======
-  - **Hardware Testbed Demarcation:** Preliminary two-wheeler field recordings were gathered on an available Android test smartphone (Samsung Galaxy M35 5G) mounted on the handlebar prior to hackathon loaner's arrival. Road dynamics (ISO 8608 roughness, 9g pothole shocks, 22.1° cornering bank) are vehicle-level physics that transfer across Android chassis.
- main
   - **Geographical Demarcation:** Physical validation rides were logged in **Chennai** (`Varadarajapuram` underpass/flyover, `Rohini Theatre Koyambedu` flyover, and `45_46` urban roads). The flight recorder cockpit models the **Hyderabad HITEC City Mindspace Underpass** surveyed OSM manifold, demonstrating cross-city generalizability across Indian grade-separated infrastructure.
   - **Deterministic 50 Hz Resampling Pipeline:** Multi-sensor streams recorded at ~60.8 Hz with OS jitter are deterministically resampled onto a uniform 50.0 Hz grid (`load_real_imu_data.py`) before tensor windowing (`[1, 6, 50]`), eliminating time dilation.
   - **Broadband Vibration Rationale:** Observed engine peaks shift from 15.3–16.7 Hz (chassis resonance) to 21.6 Hz (idle) and 29.9 Hz (cruise). This dynamic variance mathematically justifies our 1D-CNN temporal receptive field over brittle single-frequency notch filters.
