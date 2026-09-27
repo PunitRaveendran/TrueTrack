@@ -44,10 +44,10 @@ scratch/
 # Android Build & Gradle
 .gradle/
 android_app/.gradle/
-android_app/app/build/
-**/build/
-local.properties
+android_app/local.properties
 **/local.properties
+**/build/
+android_app/**/build/
 .cxx/
 *.apk
 *.aab
@@ -68,3 +68,5 @@ TrueTrack/
 
 # Generated training batches (re-generatable via physics_grounded_generator.py)
 ml_engine/synthetic_batch/
+
+device_screenshot.png

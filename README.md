@@ -2,7 +2,7 @@
 
 [![Track: Open Innovation](https://img.shields.io/badge/Track-Open%20Innovation%20(Local%20AI)-blueviolet)](https://github.com/)
 [![Target: Snapdragon NPU](https://img.shields.io/badge/Hardware-Snapdragon%20Hexagon%20NPU-red)](https://www.qualcomm.com/products/mobile/snapdragon)
-[![Model Footprint](https://img.shields.io/badge/Model%20Size-103.7%20KB%20(ONNX)-brightgreen)](ml_engine/truetrack_model.onnx)
+[![Model Footprint](https://img.shields.io/badge/Model%20Size-123.7%20KB%20(ONNX)-brightgreen)](ml_engine/truetrack_model.onnx)
 [![Latency](https://img.shields.io/badge/Inference-1.4ms%20(INT8)-orange)](ml_engine/npu_model_spec.json)
 [![Language](https://img.shields.io/badge/Python-3.9%20|%203.10%20|%203.11%20|%203.12%20|%203.13-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
