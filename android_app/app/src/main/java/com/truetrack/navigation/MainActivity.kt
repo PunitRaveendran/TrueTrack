@@ -90,6 +90,19 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var btnRecenter: ImageButton
     private lateinit var layoutLegend: View
 
+    // Diagnostics overlay
+    private lateinit var btnDiagnostics: ImageButton
+    private lateinit var cardDiagnostics: View
+    private lateinit var btnCloseDiagnostics: ImageButton
+    private lateinit var viewLeanNeedle: ImageView
+    private lateinit var tvDiagLean: TextView
+    private lateinit var tvDiagAccel: TextView
+    private lateinit var tvDiagKinematics: TextView
+    private lateinit var tvDiagNpu: TextView
+    private lateinit var tvDiagGyroBias: TextView
+    private lateinit var tvDiagGpsStatus: TextView
+    private lateinit var tvDiagDrift: TextView
+
     // ───────────────────────────────────────────────────────────────────────
     // Map overlays
     // ───────────────────────────────────────────────────────────────────────
@@ -266,6 +279,27 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         tvPlaybackTime  = findViewById(R.id.tvPlaybackTime)
         btnRecenter     = findViewById(R.id.btnRecenter)
         layoutLegend    = findViewById(R.id.layoutLegend)
+
+        // Diagnostics overlay binding & toggle
+        btnDiagnostics      = findViewById(R.id.btnDiagnostics)
+        cardDiagnostics     = findViewById(R.id.cardDiagnostics)
+        btnCloseDiagnostics = findViewById(R.id.btnCloseDiagnostics)
+        viewLeanNeedle      = findViewById(R.id.viewLeanNeedle)
+        tvDiagLean          = findViewById(R.id.tvDiagLean)
+        tvDiagAccel         = findViewById(R.id.tvDiagAccel)
+        tvDiagKinematics    = findViewById(R.id.tvDiagKinematics)
+        tvDiagNpu           = findViewById(R.id.tvDiagNpu)
+        tvDiagGyroBias      = findViewById(R.id.tvDiagGyroBias)
+        tvDiagGpsStatus     = findViewById(R.id.tvDiagGpsStatus)
+        tvDiagDrift         = findViewById(R.id.tvDiagDrift)
+
+        btnDiagnostics.setOnClickListener {
+            val isVis = cardDiagnostics.visibility == View.VISIBLE
+            cardDiagnostics.visibility = if (isVis) View.GONE else View.VISIBLE
+        }
+        btnCloseDiagnostics.setOnClickListener {
+            cardDiagnostics.visibility = View.GONE
+        }
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -952,6 +986,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             btnImuCalibration.text = "HOLD STILL"
             showStatus("IMU calibration: hold phone still for 2 seconds", "#F59E0B")
         }
+        updateDiagnostics(
+            speedKmh = 0f,
+            headingDeg = 0f,
+            ax = 0f,
+            ay = 0f,
+            az = 9.81f,
+            leanDeg = 0f,
+            effBO = false,
+            elapsedS = 0,
+            driftM = 0.0
+        )
     }
 
     private fun setupPlayback() {
@@ -1023,8 +1068,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     tvSpeed.text = "%.1f".format(f.speedKmh)
                     updateTelemetryReadout(f)
 
+                    leanCorrector.update(ax = f.rawImuAy, ay = f.rawImuAx, az = f.rawImuAz, gx = 0f)
+                    val elapsedS = if (effBO) blackoutElapsedSeconds(progress, f) else 0
+                    val driftDisplay = if (effBO) f.errNaiveM.toDouble() else 0.0
+
+                    updateDiagnostics(
+                        speedKmh = f.speedKmh,
+                        headingDeg = f.headingDeg,
+                        ax = f.rawImuAx,
+                        ay = f.rawImuAy,
+                        az = f.rawImuAz,
+                        leanDeg = leanCorrector.currentPhiDeg,
+                        effBO = effBO,
+                        elapsedS = elapsedS,
+                        driftM = driftDisplay
+                    )
+
                     if (effBO) {
-                        val elapsedS = blackoutElapsedSeconds(progress, f)
                         val message = if (isPreRecordedReplay) {
                             val tag = if (f.imuCalibrated) "RPL" else "RPL UNCAL"
                             "$tag +${elapsedS}s · INS %.0fm · model %.1fm".format(f.errNaiveM, f.errTrueTrackM)
@@ -1168,9 +1228,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         tvSpeed.text = "%.1f".format(f.speedKmh)
         updateTelemetryReadout(f)
 
+        leanCorrector.update(ax = f.rawImuAy, ay = f.rawImuAx, az = f.rawImuAz, gx = 0f)
+        val elapsedS = if (effBO) (if (isBlackout && !bakedBO) manualBoElapsed.toInt() else blackoutElapsedSeconds(simIdx, f)) else 0
+        val driftDisplay = if (effBO) (if (isBlackout && !bakedBO) haversineM(f.gtLat, f.gtLon, manualBoLat, manualBoLon) else f.errNaiveM.toDouble()) else 0.0
+
+        updateDiagnostics(
+            speedKmh = f.speedKmh,
+            headingDeg = f.headingDeg,
+            ax = f.rawImuAx,
+            ay = f.rawImuAy,
+            az = f.rawImuAz,
+            leanDeg = leanCorrector.currentPhiDeg,
+            effBO = effBO,
+            elapsedS = elapsedS,
+            driftM = driftDisplay
+        )
+
         if (effBO) {
-            val elapsedS = if (isBlackout && !bakedBO) manualBoElapsed.toInt() else blackoutElapsedSeconds(simIdx, f)
-            val driftDisplay = if (isBlackout && !bakedBO) haversineM(f.gtLat, f.gtLon, manualBoLat, manualBoLon) else f.errNaiveM.toDouble()
             val message = if (isPreRecordedReplay) {
                 val tag = if (f.imuCalibrated) "TRUETRACK CAL" else "TRUETRACK"
                 "$tag +${elapsedS}s · INS drift %.0fm · model %.1fm".format(driftDisplay, f.errTrueTrackM)
@@ -1222,6 +1296,80 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val source = if (!isPreRecordedReplay) "SIM" else if (frame.imuCalibrated) "RPL CAL" else "RPL UNCAL"
         val referenceError = if (isPreRecordedReplay) "ref=%.2fm".format(frame.errTrueTrackM) else "ref=n/a"
         tvImu.text = "$source · |a|=%.2fG · $referenceError · NPU %.1fms".format(g, lastInferenceLatencyMs)
+    }
+
+    /**
+     * Updates the on-device diagnostics overlay with live kinematics,
+     * LeanCorrector tilt angle needle, Hexagon NPU latency, route gyro bias,
+     * and GPS blackout drift metrics.
+     */
+    private fun updateDiagnostics(
+        speedKmh: Float,
+        headingDeg: Float,
+        ax: Float,
+        ay: Float,
+        az: Float,
+        leanDeg: Float,
+        effBO: Boolean,
+        elapsedS: Int,
+        driftM: Double
+    ) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnUiThread {
+                updateDiagnostics(speedKmh, headingDeg, ax, ay, az, leanDeg, effBO, elapsedS, driftM)
+            }
+            return
+        }
+
+        // 1. Visual Lean Angle Horizon Needle & Readout
+        viewLeanNeedle.rotation = -leanDeg
+        val leanDirection = when {
+            abs(leanDeg) < 0.8f -> "LEVEL"
+            leanDeg > 0 -> "RIGHT"
+            else -> "LEFT"
+        }
+        tvDiagLean.text = "LEAN: %.1f° (%s)".format(abs(leanDeg), leanDirection)
+
+        // 2. Accelerometer Norm |a|
+        val aNorm = sqrt(ax * ax + ay * ay + az * az)
+        val gVal = aNorm / 9.81f
+        tvDiagAccel.text = "|a|: %.2f G · %.2f m/s²".format(gVal, aNorm)
+
+        // 3. Kinematics: Speed & Heading
+        val cardinal = headingToCardinal(headingDeg)
+        tvDiagKinematics.text = "SPEED: %.1f km/h · HDG: %.0f° %s".format(speedKmh, headingDeg, cardinal)
+
+        // 4. Hexagon NPU Latency
+        tvDiagNpu.text = "LATENCY: %.1f ms".format(lastInferenceLatencyMs)
+
+        // 5. Current Calibrated Route Gyro Bias
+        val biasSign = if (manualBoBiasGz >= 0) "+" else ""
+        tvDiagGyroBias.text = "BIAS: %s%.4f rad/s".format(biasSign, manualBoBiasGz)
+
+        // 6. Blackout State & Duration
+        if (effBO) {
+            tvDiagGpsStatus.text = "BLACKOUT: +%ds".format(elapsedS)
+            tvDiagGpsStatus.setTextColor(Color.parseColor("#EF4444"))
+        } else {
+            tvDiagGpsStatus.text = "LOCK: NOMINAL"
+            tvDiagGpsStatus.setTextColor(Color.parseColor("#10B981"))
+        }
+
+        // 7. Running INS Drift
+        if (effBO) {
+            tvDiagDrift.text = "DRIFT: %.1f m".format(driftM)
+            tvDiagDrift.setTextColor(Color.parseColor("#EF4444"))
+        } else {
+            tvDiagDrift.text = "DRIFT: 0.0 m (LOCKED)"
+            tvDiagDrift.setTextColor(Color.parseColor("#64748B"))
+        }
+    }
+
+    private fun headingToCardinal(deg: Float): String {
+        val normDeg = ((deg % 360) + 360) % 360
+        val directions = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+        val idx = (((normDeg + 22.5f) / 45f).toInt()) % 8
+        return directions[idx]
     }
 
     private fun blackoutElapsedSeconds(index: Int, frame: TelemetryFrame): Int {
@@ -1282,6 +1430,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             btnKillGps.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#14532D"))
             btnKillGps.setTextColor(Color.parseColor("#4ADE80"))
             showStatus("GPS KILLED — DEAD RECKONING ACTIVE", "#EF4444")
+        }
+
+        if (simIdx in simFrames.indices) {
+            val f = simFrames[simIdx]
+            val bakedBO = f.isBlackout
+            val effBO = if (isForcedGpsRestore) false else (bakedBO || isBlackout)
+            updateDiagnostics(
+                speedKmh = f.speedKmh,
+                headingDeg = f.headingDeg,
+                ax = f.rawImuAx,
+                ay = f.rawImuAy,
+                az = f.rawImuAz,
+                leanDeg = leanCorrector.currentPhiDeg,
+                effBO = effBO,
+                elapsedS = if (effBO) manualBoElapsed.toInt() else 0,
+                driftM = 0.0
+            )
         }
     }
 
@@ -1392,6 +1557,18 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     if (f0 != null) {
                         tvSpeed.text = "%.1f".format(f0.speedKmh)
                         updateTelemetryReadout(f0)
+                        leanCorrector.update(ax = f0.rawImuAy, ay = f0.rawImuAx, az = f0.rawImuAz, gx = 0f)
+                        updateDiagnostics(
+                            speedKmh = f0.speedKmh,
+                            headingDeg = f0.headingDeg,
+                            ax = f0.rawImuAx,
+                            ay = f0.rawImuAy,
+                            az = f0.rawImuAz,
+                            leanDeg = leanCorrector.currentPhiDeg,
+                            effBO = f0.isBlackout,
+                            elapsedS = 0,
+                            driftM = 0.0
+                        )
                     }
 
                     startSim()
@@ -1521,6 +1698,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                                 val g = sqrt(ax * ax + ay * ay + az * az) / 9.81f
                                 tvSpeed.text = "%.1f".format(predSpeedKmh)
                                 tvImu.text = "LIVE NPU · %.1f ms · |a|=%.2fG · phi=%.1f°".format(lastInferenceLatencyMs, g, leanCorrector.currentPhiDeg)
+                                updateDiagnostics(
+                                    speedKmh = predSpeedKmh,
+                                    headingDeg = vehicleMarker.rotation,
+                                    ax = ax,
+                                    ay = ay,
+                                    az = az,
+                                    leanDeg = leanCorrector.currentPhiDeg,
+                                    effBO = isBlackout,
+                                    elapsedS = if (isBlackout) ((SystemClock.elapsedRealtime() - blackoutStartMs) / 1000).toInt() else 0,
+                                    driftM = 0.0
+                                )
                             }
                         }
                     }
@@ -1535,6 +1723,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             val yaw = imuCalibrator.correctedYawRate(gx, gy, gz)
             tvImu.text = if (yaw.isNaN()) "UNCAL · |a|=%.2fG · NPU READY".format(g)
             else "CAL · |a|=%.2fG · yaw=%.3f rad/s · NPU READY".format(g, yaw)
+            updateDiagnostics(
+                speedKmh = tvSpeed.text.toString().toFloatOrNull() ?: 0f,
+                headingDeg = vehicleMarker.rotation,
+                ax = ax,
+                ay = ay,
+                az = az,
+                leanDeg = leanCorrector.currentPhiDeg,
+                effBO = isBlackout,
+                elapsedS = if (isBlackout) ((SystemClock.elapsedRealtime() - blackoutStartMs) / 1000).toInt() else 0,
+                driftM = 0.0
+            )
         }
 
         // Green Light Bridge: Broadcast live physical phone telemetry (50Hz) to laptop cockpit

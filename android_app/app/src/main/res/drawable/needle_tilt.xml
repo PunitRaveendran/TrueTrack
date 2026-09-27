@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <!-- Left wing -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M6,31 L24,31 L24,33 L6,33 Z" />
+    <!-- Left bank tick -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M6,27 L8,27 L8,37 L6,37 Z" />
+    <!-- Center pivot ring -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M32,29 A3,3 0 1,0 32,35 A3,3 0 1,0 32,29 Z" />
+    <!-- Upward reference pip -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M31,21 L33,21 L32,17 Z" />
+    <!-- Right wing -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M40,31 L58,31 L58,33 L40,33 Z" />
+    <!-- Right bank tick -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M56,27 L58,27 L58,37 L56,37 Z" />
+</vector>
