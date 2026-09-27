@@ -51,6 +51,7 @@ import org.osmdroid.views.overlay.Polyline
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.UUID
 import java.util.concurrent.Executors
 import kotlin.math.*
 
@@ -150,6 +151,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var locationManager: LocationManager
     private val partyMarkers = mutableMapOf<String, Marker>()
     private var lastPartyBroadcastMs = 0L
+    private var lastPartyErrorToastMs = 0L
+    private var partyInitialFitDone = false
+    private var sharedPartyRoute: PartyRoute? = null
+    private var activeRouteCoordinates: List<Pair<Double, Double>> = emptyList()
+    private var localPartyRouteId: String? = null
+    private var partyRerouteInProgress = false
+    private var lastPartyRerouteMs = 0L
     private var pendingPartyName = "Rider"
     private val partyLocationListener = LocationListener { location -> broadcastPartyLocation(location) }
     private val partyScanLauncher = registerForActivityResult(ScanContract()) { result ->
@@ -555,7 +563,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // ───────────────────────────────────────────────────────────────────────
     // Offline A* — HITEC Hyderabad (fallback when no internet)
     // ───────────────────────────────────────────────────────────────────────
-    private fun routeOffline(fLat: Double, fLon: Double, tLat: Double, tLon: Double) {
+    private fun routeOffline(
+        fLat: Double, fLon: Double, tLat: Double, tLon: Double,
+        onRouted: ((List<Pair<Double, Double>>, Double) -> Unit)? = null
+    ) {
         val r = offlineRouter; val idx = offlineIndex
         if (r == null || idx == null) {
             runOnUiThread {
@@ -576,7 +587,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             val result = r.findRoute(sNode.id, gNode.id)
             runOnUiThread {
                 if (result != null) {
-                    onRouteReady(result.coordinates, result.totalDistanceM)
+                    if (onRouted != null) onRouted(result.coordinates, result.totalDistanceM)
+                    else onRouteReady(result.coordinates, result.totalDistanceM)
                 } else {
                     resetNavButton()
                     showStatus("No offline route found", "#EF4444")
@@ -588,10 +600,29 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // ───────────────────────────────────────────────────────────────────────
     // Route ready — draw grey line + build simulation
     // ───────────────────────────────────────────────────────────────────────
-    private fun onRouteReady(coords: List<Pair<Double, Double>>, distM: Double) {
+    private fun onRouteReady(coords: List<Pair<Double, Double>>, distM: Double, publishPartyRoute: Boolean = true) {
         resetNavButton()
         if (coords.size < 2) { showStatus("Empty route", "#EF4444"); return }
         isPreRecordedReplay = false
+        activeRouteCoordinates = coords
+
+        if (publishPartyRoute && partyManager.activeRoomCode() != null) {
+            localPartyRouteId = UUID.randomUUID().toString()
+            sharedPartyRoute = PartyRoute(
+                localPartyRouteId!!,
+                coords,
+                etDestination.text.toString().trim().ifBlank { "Shared destination" },
+                destLat,
+                destLon
+            )
+            partyManager.publishRoute(
+                coords,
+                etDestination.text.toString().trim().ifBlank { "Shared destination" },
+                destLat,
+                destLon,
+                localPartyRouteId!!
+            )
+        }
 
         Log.i(TAG, "Route: ${coords.size} waypoints, ${distM.toInt()}m")
 
@@ -652,7 +683,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             updateTelemetryReadout(f0)
         }
 
-        startSim()
+        if (partyManager.activeRoomCode() == null) {
+            startSim()
+        } else {
+            stopSim()
+            vehicleMarker.isEnabled = false
+            isPaused = true
+            btnPlayPause.setImageResource(android.R.drawable.ic_media_play)
+        }
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -1403,8 +1441,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         partyManager = PartyManager(
             this,
             onMembersChanged = { members -> runOnUiThread { renderPartyMembers(members) } },
+            onRouteChanged = { route -> runOnUiThread {
+                if (route == null) sharedPartyRoute = null else applyPartyRoute(route)
+            } },
             onStatus = { message, available -> runOnUiThread {
                 showStatus(message, if (available) "#10B981" else "#EF4444")
+                val now = SystemClock.elapsedRealtime()
+                if (!available && now - lastPartyErrorToastMs >= 10_000L) {
+                    lastPartyErrorToastMs = now
+                    Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                }
             } }
         )
     }
@@ -1462,11 +1508,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             Toast.makeText(this, "Enter a valid 6-character room code", Toast.LENGTH_SHORT).show()
             return
         }
-        partyManager.joinParty(code, name) { startPartyLocationUpdates() }
+        partyManager.joinParty(code, name) {
+            partyInitialFitDone = false
+            startPartyLocationUpdates()
+        }
     }
 
     private fun showPartyQr(code: String) {
-        if (partyManager.activeRoomCode() == code) startPartyLocationUpdates()
+        if (partyManager.activeRoomCode() == code) {
+            partyInitialFitDone = false
+            startPartyLocationUpdates()
+        }
         val image = ImageView(this)
         image.setImageBitmap(BarcodeEncoder().encodeBitmap("TRUETRACK:$code", BarcodeFormat.QR_CODE, 700, 700))
         image.contentDescription = "Party QR code for room $code"
@@ -1475,13 +1527,34 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     private fun startPartyLocationUpdates() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        stopSim()
+        isPaused = true
+        vehicleMarker.isEnabled = false
+        btnPlayPause.setImageResource(android.R.drawable.ic_media_play)
+        val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) {
             requestPermissions()
             showStatus("Party location needs location permission", "#F59E0B")
             return
         }
-        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 3_000L, 0f, partyLocationListener)
-        locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.let { broadcastPartyLocation(it) }
+        val provider = when {
+            fine && locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+            locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+            else -> null
+        }
+        if (provider == null) {
+            showStatus("Enable location to share your party puck", "#F59E0B")
+            return
+        }
+        try {
+            locationManager.requestLocationUpdates(provider, 2_000L, 0f, partyLocationListener)
+            locationManager.getLastKnownLocation(provider)?.let { broadcastPartyLocation(it) }
+        } catch (e: SecurityException) {
+            showStatus("Location permission is needed to share your party puck", "#F59E0B")
+        } catch (e: IllegalArgumentException) {
+            showStatus("Location provider unavailable", "#F59E0B")
+        }
     }
 
     private fun stopPartyLocationUpdates() {
@@ -1490,19 +1563,87 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     private fun broadcastPartyLocation(location: Location) {
         if (partyManager.activeRoomCode() == null) return
+        if (location.hasAccuracy() && location.accuracy <= 100f) maybeRerouteToSharedRoute(location)
         val now = SystemClock.elapsedRealtime()
-        if (now - lastPartyBroadcastMs >= 3_000L) {
+        if (now - lastPartyBroadcastMs >= 2_000L) {
             lastPartyBroadcastMs = now
             partyManager.broadcastLocation(location.latitude, location.longitude)
         }
     }
 
+    private fun applyPartyRoute(route: PartyRoute) {
+        if (route.routeId == localPartyRouteId) return
+        sharedPartyRoute = route
+        originLat = route.coordinates.first().first
+        originLon = route.coordinates.first().second
+        destLat = route.destinationLat
+        destLon = route.destinationLon
+        etOrigin.setText("Party route")
+        etDestination.setText(route.destinationName)
+        onRouteReady(route.coordinates, routeLength(route.coordinates), publishPartyRoute = false)
+        showStatus("Following party route to ${route.destinationName}", "#00E5FF")
+    }
+
+    private fun routeLength(points: List<Pair<Double, Double>>): Double =
+        points.zipWithNext().sumOf { (a, b) -> haversineM(a.first, a.second, b.first, b.second) }
+
+    private fun maybeRerouteToSharedRoute(location: Location) {
+        val route = sharedPartyRoute ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (partyRerouteInProgress || now - lastPartyRerouteMs < 15_000L) return
+
+        val nearest = route.coordinates.indices.minByOrNull { index ->
+            val point = route.coordinates[index]
+            haversineM(location.latitude, location.longitude, point.first, point.second)
+        } ?: return
+        val point = route.coordinates[nearest]
+        val distance = haversineM(location.latitude, location.longitude, point.first, point.second)
+        val offRouteThreshold = maxOf(90.0, location.accuracy.toDouble() * 2.5)
+        if (distance < offRouteThreshold) return
+
+        val joinIndex = (nearest + 2).coerceAtMost(route.coordinates.lastIndex)
+        val joinPoint = route.coordinates[joinIndex]
+        partyRerouteInProgress = true
+        lastPartyRerouteMs = now
+        showStatus("Off party route · finding a way back", "#F59E0B")
+
+        fun useDetour(detour: List<Pair<Double, Double>>, detourDistance: Double) {
+            partyRerouteInProgress = false
+            if (sharedPartyRoute?.routeId != route.routeId) return
+            if (detour.size < 2) {
+                showStatus("Could not find a route back to the party route", "#EF4444")
+                return
+            }
+            val combined = detour + route.coordinates.drop(joinIndex + 1)
+            onRouteReady(combined, detourDistance + routeLength(route.coordinates.drop(joinIndex)), publishPartyRoute = false)
+            showStatus("Rerouted · rejoining party route", "#10B981")
+        }
+
+        routeOSRM(location.latitude, location.longitude, joinPoint.first, joinPoint.second,
+            onResult = ::useDetour,
+            onFallback = {
+                routeOffline(location.latitude, location.longitude, joinPoint.first, joinPoint.second, ::useDetour)
+                simHandler.postDelayed({
+                    if (partyRerouteInProgress) {
+                        partyRerouteInProgress = false
+                        showStatus("No route back available · staying on shared route", "#EF4444")
+                    }
+                }, 20_000L)
+            }
+        )
+    }
+
     private fun renderPartyMembers(members: Map<String, PartyMember>) {
-        val activeIds = members.keys
+        val now = System.currentTimeMillis()
+        val visible = members.filter { (_, member) ->
+            member.lat in -90.0..90.0 && member.lon in -180.0..180.0 &&
+                (member.lat != 0.0 || member.lon != 0.0) &&
+                (member.timestamp == 0L || now - member.timestamp < 30_000L)
+        }
+        val activeIds = visible.keys
         partyMarkers.filterKeys { it !in activeIds }.values.forEach { mapView.overlays.remove(it) }
         partyMarkers.keys.retainAll(activeIds)
-        members.forEach { (id, member) ->
-            if (member.lat == 0.0 && member.lon == 0.0) return@forEach
+        visible.forEach { (id, member) ->
             val marker = partyMarkers.getOrPut(id) {
                 Marker(mapView).apply {
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
@@ -1513,6 +1654,26 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             marker.position = GeoPoint(member.lat, member.lon)
             marker.title = member.displayName
             marker.snippet = "Party member"
+        }
+        if (visible.isNotEmpty()) {
+            val points = visible.values.map { GeoPoint(it.lat, it.lon) }
+            val box = mapView.boundingBox
+            val allOnScreen = points.all { point ->
+                point.latitude in box.latSouth..box.latNorth && point.longitude in box.lonWest..box.lonEast
+            }
+            if (!partyInitialFitDone || !allOnScreen) {
+                partyInitialFitDone = true
+                if (points.size > 1) {
+                    val minLat = points.minOf { it.latitude }
+                    val maxLat = points.maxOf { it.latitude }
+                    val minLon = points.minOf { it.longitude }
+                    val maxLon = points.maxOf { it.longitude }
+                    val pad = maxOf(0.001, (maxLat - minLat) * 0.15, (maxLon - minLon) * 0.15)
+                    mapView.zoomToBoundingBox(BoundingBox(maxLat + pad, maxLon + pad, minLat - pad, minLon - pad), true, 250)
+                } else {
+                    mapView.controller.setCenter(points.first())
+                }
+            }
         }
         mapView.invalidate()
     }
@@ -1536,6 +1697,18 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             ActivityCompat.requestPermissions(this,
                 arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
                 PERM_REQ)
+        }
+    }
+
+    @Deprecated("Deprecated in Android API; retained for the app's minSdk-compatible permission flow")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == PERM_REQ && partyManager.activeRoomCode() != null) {
+            if (grantResults.any { it == PackageManager.PERMISSION_GRANTED }) {
+                startPartyLocationUpdates()
+            } else {
+                showStatus("Allow location to make your party puck visible", "#F59E0B")
+            }
         }
     }
 
