@@ -162,8 +162,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var lastInferenceTimeMs = 0L
     private var lastInferenceLatencyMs = 1.2f
     private var prevBlackoutState = false
-    private val normMeans = floatArrayOf(0.045f, 0.128f, 9.805f, 0.001f, 0.002f, 0.001f)
-    private val normStds  = floatArrayOf(1.240f, 1.450f, 1.120f, 0.210f, 0.190f, 0.280f)
+    private val normMeans = floatArrayOf(0.001604f, 0.021750f, 10.162333f, -0.0000055f, -0.0000263f, 0.002174f)
+    private val normStds  = floatArrayOf(1.991323f, 11.172050f, 47.683000f, 0.107236f, 0.006107f, 0.133075f)
 
     // Networking & offline router
     private val executor = Executors.newCachedThreadPool()
@@ -915,14 +915,18 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
             val stepM = speedMs * dtSec
             distSoFar += stepM
-            fracInSeg += stepM / segLen
 
-            while (fracInSeg >= 1.0 && segIdx < n - 1) {
-                fracInSeg -= 1.0
-                segIdx++
-                if (segIdx < n - 1) {
-                    val nextLen = max(0.1, segD[segIdx])
-                    fracInSeg = (fracInSeg * segLen) / nextLen
+            var remStepM = stepM
+            while (remStepM > 0.0 && segIdx < n - 1) {
+                val currentSegLen = max(0.1, segD[segIdx])
+                val distRemainingInSeg = (1.0 - fracInSeg) * currentSegLen
+                if (remStepM < distRemainingInSeg) {
+                    fracInSeg += remStepM / currentSegLen
+                    remStepM = 0.0
+                } else {
+                    remStepM -= distRemainingInSeg
+                    fracInSeg = 0.0
+                    segIdx++
                 }
             }
 
@@ -966,6 +970,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 if (simFrames.isNotEmpty()) {
                     if (simIdx >= simFrames.size || simIdx == 0) {
                         simIdx = 0
+                        isBlackout = false
+                        isForcedGpsRestore = false
+                        manualBoElapsed = 0.0
+                        btnKillGps.text = "KILL GPS"
+                        btnKillGps.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#7F1D1D"))
+                        btnKillGps.setTextColor(Color.parseColor("#FCA5A5"))
                         ttPts.clear()
                         naivePts.clear()
                         trueTrackOverlay.setPoints(emptyList())
@@ -983,7 +993,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 if (fromUser && progress in simFrames.indices) {
                     simIdx = progress
                     val f = simFrames[simIdx]
-                    val pos = GeoPoint(f.gtLat, f.gtLon)
+                    val pos = GeoPoint(f.trueTrackLat, f.trueTrackLon)
                     vehicleMarker.position = pos
                     vehicleMarker.rotation = f.headingDeg
                     updateTimeLabel(simIdx)
@@ -999,10 +1009,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     val effBO = if (isForcedGpsRestore) false else (bakedBO || isBlackout)
                     naivePts.clear()
                     if (effBO) {
-                        for (i in 0..progress) {
-                            if (simFrames[i].isBlackout) {
-                                naivePts.add(GeoPoint(simFrames[i].naiveLat, simFrames[i].naiveLon))
-                            }
+                        var startIdx = progress
+                        while (startIdx > 0 && simFrames[startIdx - 1].isBlackout) {
+                            startIdx--
+                        }
+                        for (i in startIdx..progress) {
+                            naivePts.add(GeoPoint(simFrames[i].naiveLat, simFrames[i].naiveLon))
                         }
                     }
                     naiveDriftOverlay.setPoints(ArrayList(naivePts))
@@ -1042,7 +1054,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         btnRecenter.setOnClickListener {
             isAutoFollow = true
             if (simIdx in simFrames.indices) {
-                mapView.controller.animateTo(GeoPoint(simFrames[simIdx].gtLat, simFrames[simIdx].gtLon))
+                mapView.controller.animateTo(GeoPoint(simFrames[simIdx].trueTrackLat, simFrames[simIdx].trueTrackLon))
             }
         }
     }
@@ -1120,17 +1132,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             if (isBlackout && !bakedBO) {
                 val dt = TICK_MS / 1000.0
                 manualBoElapsed += dt
-                manualBoThetaRad += (f.rawImuGz + manualBoBiasGz) * dt
-                val aFwd = (f.rawImuAx + manualBoBiasAx.toFloat()).toDouble().coerceIn(-2.5, 2.5)
-                val aEast = aFwd * sin(manualBoThetaRad)
-                val aNorth = aFwd * cos(manualBoThetaRad)
-                manualBoVx += aEast * dt
-                manualBoVy += aNorth * dt
-                val speed = hypot(manualBoVx, manualBoVy)
-                if (speed > 16.0) {
-                    manualBoVx = (manualBoVx / speed) * 16.0
-                    manualBoVy = (manualBoVy / speed) * 16.0
-                }
+                // In Android portrait IMU frame, -gz increases clockwise compass heading
+                val yawRate = if (isPreRecordedReplay) -f.rawImuGz.toDouble() else f.rawImuGz.toDouble()
+                manualBoThetaRad += (yawRate + manualBoBiasGz) * dt
+
+                // Vehicle forward momentum propagation along estimated heading (quadratically diverging INS)
+                val vMag = hypot(manualBoVx, manualBoVy).coerceIn(1.5, 18.0)
+                manualBoVx = vMag * sin(manualBoThetaRad)
+                manualBoVy = vMag * cos(manualBoThetaRad)
+
                 manualBoLat += (manualBoVy * dt) / 111_139.0
                 manualBoLon += (manualBoVx * dt) / (111_139.0 * cos(Math.toRadians(manualBoLat)))
                 naivePt = GeoPoint(manualBoLat, manualBoLon)
@@ -1252,10 +1262,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             manualBoElapsed    = 0.0
             if (simIdx in simFrames.indices) {
                 val f = simFrames[simIdx]
-                manualBoLat = f.gtLat
-                manualBoLon = f.gtLon
+                manualBoLat = f.trueTrackLat
+                manualBoLon = f.trueTrackLon
                 manualBoThetaRad = Math.toRadians(f.headingDeg.toDouble())
-                val v0 = f.speedKmh / 3.6
+                val v0 = max(1.5, (f.speedKmh / 3.6).toDouble())
                 manualBoVx = v0 * sin(manualBoThetaRad)
                 manualBoVy = v0 * cos(manualBoThetaRad)
             }
@@ -1318,6 +1328,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 runOnUiThread {
                     stopSim()
                     isPreRecordedReplay = true
+                    sharedPartyRoute = null
                     simFrames.clear(); simFrames.addAll(frames)
                     simIdx = 0; isPaused = false; isBlackout = false; isForcedGpsRestore = false
                     manualBoElapsed = 0.0
@@ -1327,9 +1338,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
                     plannedOverlay.setPoints(centerline)
 
-                    val firstPt = centerline.first()
-                    pinA.position = firstPt;            pinA.isEnabled = true
-                    pinB.position = centerline.last();  pinB.isEnabled = true
+                    val firstPt = centerline.firstOrNull() ?: return@runOnUiThread
+                    val lastPt  = centerline.lastOrNull() ?: firstPt
+                    pinA.position = firstPt; pinA.isEnabled = true
+                    pinB.position = lastPt;  pinB.isEnabled = true
                     mapView.overlays.removeAll(listOf(pinA, pinB, vehicleMarker))
                     mapView.overlays.add(pinA)
                     mapView.overlays.add(pinB)
@@ -1627,7 +1639,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     private fun currentCoordinates(): Pair<Double, Double> {
         return when {
-            simIdx in simFrames.indices -> Pair(simFrames[simIdx].gtLat, simFrames[simIdx].gtLon)
+            simIdx in simFrames.indices -> Pair(simFrames[simIdx].trueTrackLat, simFrames[simIdx].trueTrackLon)
             ::vehicleMarker.isInitialized && vehicleMarker.isEnabled -> Pair(vehicleMarker.position.latitude, vehicleMarker.position.longitude)
             originLat != 0.0 && originLon != 0.0 -> Pair(originLat, originLon)
             ::mapView.isInitialized && mapView.mapCenter != null -> Pair(mapView.mapCenter.latitude, mapView.mapCenter.longitude)
@@ -1745,6 +1757,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     private fun broadcastPartyLocation(location: Location) {
         if (partyManager.activeRoomCode() == null) return
+        // Do NOT allow physical GPS fixes to broadcast room coordinates or trigger reroute during sim or replay
+        if (isSimRunning || isPreRecordedReplay || simFrames.isNotEmpty()) return
+
         if (location.hasAccuracy() && location.accuracy <= 100f) maybeRerouteToSharedRoute(location)
         val now = SystemClock.elapsedRealtime()
         if (now - lastPartyBroadcastMs >= 2_000L) {
@@ -1770,6 +1785,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         points.zipWithNext().sumOf { (a, b) -> haversineM(a.first, a.second, b.first, b.second) }
 
     private fun maybeRerouteToSharedRoute(location: Location) {
+        // Defense-in-depth: Never allow physical GPS fixes to rebuild route during active sim or replay
+        if (isSimRunning || isPreRecordedReplay || simFrames.isNotEmpty()) return
         val route = sharedPartyRoute ?: return
         val now = SystemClock.elapsedRealtime()
         if (partyRerouteInProgress || now - lastPartyRerouteMs < 15_000L) return
@@ -1967,6 +1984,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         stopPartyLocationUpdates()
         partyManager.leaveParty()
         sensorManager.unregisterListener(this)
+        try {
+            audioManager.shutdown()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error shutting down audioManager: ${e.message}")
+        }
+        try {
+            ortSession?.close()
+            ortSession = null
+            ortEnv?.close()
+            ortEnv = null
+        } catch (e: Exception) {
+            Log.w(TAG, "Error closing ONNX session: ${e.message}")
+        }
+        simHandler.removeCallbacksAndMessages(null)
         executor.shutdown()
     }
 }
