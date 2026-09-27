@@ -167,6 +167,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     // Networking & offline router
     private val executor = Executors.newCachedThreadPool()
+    private var streamServer: TelemetryStreamServer? = null
     private var offlineRouter: Router? = null
     private var offlineIndex: GraphIndex? = null
     private lateinit var partyManager: PartyManager
@@ -228,6 +229,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         initSensors()
         initPartySharing()
         initOfflineRouter()
+        try {
+            streamServer = TelemetryStreamServer(8765).apply { start() }
+            Log.i(TAG, "TelemetryStreamServer started on port 8765")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to start TelemetryStreamServer: ${e.message}")
+        }
         requestPermissions()
     }
 
@@ -1163,6 +1170,21 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         if (isAutoFollow) mapView.controller.setCenter(pos)
         mapView.invalidate()
 
+        // 7. Green Light Bridge: Broadcast live 10Hz simulation telemetry to laptop cockpit
+        streamServer?.broadcastTelemetry(
+            timestampMs = f.timestampMs,
+            speedKmh = f.speedKmh,
+            yawRateDeg = (f.rawImuGz * 180f / Math.PI.toFloat()),
+            leanDeg = f.leanAngleDeg,
+            isBlackout = effBO,
+            npuLatencyMs = lastInferenceLatencyMs,
+            ax = f.rawImuAx,
+            ayDerolled = f.rawImuAy,
+            az = f.rawImuAz,
+            lat = f.trueTrackLat,
+            lon = f.trueTrackLon
+        )
+
         simIdx++
     }
 
@@ -1480,6 +1502,24 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             val yaw = imuCalibrator.correctedYawRate(gx, gy, gz)
             tvImu.text = if (yaw.isNaN()) "UNCAL · |a|=%.2fG · NPU READY".format(g)
             else "CAL · |a|=%.2fG · yaw=%.3f rad/s · NPU READY".format(g, yaw)
+        }
+
+        // Green Light Bridge: Broadcast live physical phone telemetry (50Hz) to laptop cockpit
+        if (simFrames.isEmpty()) {
+            val coords = currentCoordinates()
+            streamServer?.broadcastTelemetry(
+                timestampMs = System.currentTimeMillis(),
+                speedKmh = tvSpeed.text.toString().toFloatOrNull() ?: 0f,
+                yawRateDeg = (gz * 180f / Math.PI.toFloat()),
+                leanDeg = leanCorrector.currentPhiDeg,
+                isBlackout = isBlackout,
+                npuLatencyMs = lastInferenceLatencyMs,
+                ax = axIn,
+                ayDerolled = ayIn,
+                az = azIn,
+                lat = coords?.first ?: 17.4435,
+                lon = coords?.second ?: 78.3772
+            )
         }
     }
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -1913,6 +1953,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
     override fun onDestroy() {
         super.onDestroy()
+        try {
+            streamServer?.stop()
+            streamServer = null
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping TelemetryStreamServer: ${e.message}")
+        }
         stopPartyLocationUpdates()
         partyManager.leaveParty()
         sensorManager.unregisterListener(this)

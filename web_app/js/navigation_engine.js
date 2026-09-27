@@ -2151,7 +2151,18 @@ class TrueTrackCockpit {
     const destPoi = this.demoPois.find(p => p.id === destId) || this.demoPois[1];
 
     if (origId === destId) {
-      alert('Point A and Point B cannot be the same location.');
+      const stepText = document.getElementById('route-step-text');
+      const infoCard = document.getElementById('gmaps-route-info');
+      const distVal = document.getElementById('route-dist-val');
+      const etaVal = document.getElementById('route-eta-val');
+      const nodesVal = document.getElementById('route-nodes-val');
+      if (infoCard) infoCard.style.display = 'flex';
+      if (distVal) distVal.textContent = '0 m';
+      if (etaVal) etaVal.textContent = '0s';
+      if (nodesVal) nodesVal.textContent = '1 node';
+      if (stepText) {
+        stepText.innerHTML = `<span style="color: #f59e0b; font-weight: 500;">&#9888; Origin and Destination are identical (<strong>${origPoi.name}</strong>). Select a distinct destination.</span>`;
+      }
       return;
     }
 
@@ -2392,6 +2403,7 @@ class TrueTrackCockpit {
     const nodes = this.roadGraph.nodes;
     const adj = this.roadGraph.adjacency;
     if (!nodes[startId] || !nodes[goalId]) return null;
+    if (startId === goalId) return [startId];
 
     const goalLat = nodes[goalId].lat;
     const goalLon = nodes[goalId].lon;

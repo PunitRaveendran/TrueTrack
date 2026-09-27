@@ -505,7 +505,12 @@
             <span class="ch-badge ch-gz">gz</span>
           </div>
         </div>
-        <canvas id="canvas-imu-wave" class="diag-canvas" width="380" height="85"></canvas>
+        <canvas id="canvas-imu-wave" class="diag-canvas" width="380" height="70"></canvas>
+        <div class="diag-sub-header" style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; font-size:9.5px; color:#94a3b8;">
+          <span>Vibration FFT &bull; 0–50 Hz Harmonics</span>
+          <span style="color:#d97706; font-weight:600;">21.6 Hz (Idle) / 29.9 Hz (Cruise)</span>
+        </div>
+        <canvas id="canvas-fft" class="diag-canvas" width="380" height="35" style="height:35px; margin-top:2px;"></canvas>
         <div class="diag-footer" id="hood-imu-meta">
           <span id="trace-val-ax" style="color: #38bdf8;">ax: 0.00 m/s&sup2;</span> &bull; 
           <span id="trace-val-ay" style="color: #f59e0b;">ay: 0.00 m/s&sup2;</span> &bull; 
@@ -549,6 +554,14 @@
           <div class="state-metric">
             <span class="s-lbl">Cross-track uncertainty (&sigma;<sub>&perp;</sub>)</span>
             <span class="s-val tt-txt" id="hood-sigma-cross">0.18 m</span>
+          </div>
+          <div class="state-metric">
+            <span class="s-lbl">Forward Speed</span>
+            <span class="s-val" id="hood-speed-val">0.0 km/h</span>
+          </div>
+          <div class="state-metric">
+            <span class="s-lbl">Turn Rate (&omega;<sub>z</sub>)</span>
+            <span class="s-val" id="hood-yaw-val">0.0 &deg;/s</span>
           </div>
         </div>
         <div class="diag-footer" id="hood-status-footer">Road manifold bounds lateral &sigma;<sub>&perp;</sub> &le; 0.18 m inside tunnel</div>

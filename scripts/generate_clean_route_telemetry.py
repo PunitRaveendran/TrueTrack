@@ -67,54 +67,42 @@ def load_sensor_csv(filepath):
     return {h: np.array(vals) for h, vals in cols.items()}
 
 
-def find_stationary_calibration(accel, gyro, sample_rate=10):
-    """Return a verified two-second stationary window, or None.
-
-    Never estimate sensor bias from a moving/turning pre-blackout segment;
-    doing so subtracts real vehicle acceleration and yaw from the replay.
+def find_stationary_calibration(accel, gyro, speeds, sample_rate=10):
     """
-    window = 2 * sample_rate
-    if len(accel) < window:
+    Identifies a stationary segment strictly verified by Location.csv speed (< 0.3 m/s)
+    and low gyro/accel variance (to reject engine vibrations and handling).
+    Window size = 1.5s.
+    If no window has speed < 0.3 m/s, returns None (honest uncalibrated state).
+    """
+    window = int(1.5 * sample_rate)
+    if len(accel) < window or speeds is None:
         return None
+
     best = None
     best_score = float("inf")
     for start in range(len(accel) - window + 1):
+        spd = speeds[start:start + window]
+        if np.max(spd) >= 0.30:  # HARD GATE: GPS speed must be < 0.30 m/s (~1 km/h)
+            continue
+
         a = accel[start:start + window]
         w = gyro[start:start + window]
         a_mag = np.linalg.norm(a, axis=1)
         w_mag = np.linalg.norm(w, axis=1)
+
+        w_var = float(np.var(w, axis=0).sum())
+        a_var = float(np.var(a, axis=0).sum())
         score = (
-            abs(float(a_mag.mean()) - 9.80665) * 2.0
-            + float(a_mag.std()) * 2.0
+            w_var * 50.0
             + float(w_mag.mean()) * 20.0
-            + float(w.std(axis=0).mean()) * 10.0
+            + abs(float(a_mag.mean()) - 9.80665) * 2.0
+            + a_var
         )
-        stationary = (
-            abs(float(a_mag.mean()) - 9.80665) < 0.85
-            and float(a_mag.std()) < 0.85
-            and float(w_mag.mean()) < 0.18
-            and float(w.std(axis=0).mean()) < 0.12
-            and float(a.std(axis=0).max()) < 1.2
-        )
-        if stationary and score < best_score:
+
+        if score < best_score:
             best = (start, start + window)
             best_score = score
-    if best is None and best_score < 25.0:
-        # Fallback to lowest variance window before blackout
-        for start in range(len(accel) - window + 1):
-            a = accel[start:start + window]
-            w = gyro[start:start + window]
-            a_mag = np.linalg.norm(a, axis=1)
-            w_mag = np.linalg.norm(w, axis=1)
-            score = (
-                abs(float(a_mag.mean()) - 9.80665) * 2.0
-                + float(a_mag.std()) * 2.0
-                + float(w_mag.mean()) * 20.0
-                + float(w.std(axis=0).mean()) * 10.0
-            )
-            if score == best_score:
-                best = (start, start + window)
-                break
+
     return best
 
 
@@ -176,28 +164,32 @@ def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, outp
     bearing_interp = np.interp(t_grid, df_loc['seconds_elapsed'], df_loc['bearing'])
 
     # Calibrate only from a verified stationary segment before the blackout.
-    # Search the original recording so route slicing cannot discard startup.
-    calib_start_t = max(float(df_tot['seconds_elapsed'][0]), blk_start - 30.0)
+    # Search from beginning of recording up to blackout start.
+    calib_start_t = float(df_tot['seconds_elapsed'][0])
     calib_t = np.arange(calib_start_t, blk_start, dt)
+    calib_spd = np.interp(calib_t, df_loc['seconds_elapsed'], df_loc['speed'])
     calib_acc = np.column_stack([
         np.interp(calib_t, df_tot['seconds_elapsed'], acc_aligned[:, axis]) for axis in range(3)
     ])
     calib_gyro = np.column_stack([
         np.interp(calib_t, df_gyro['seconds_elapsed'], gyro_aligned[:, axis]) for axis in range(3)
     ])
-    calibration_window = find_stationary_calibration(calib_acc, calib_gyro, sample_rate=round(1.0 / dt))
+    calibration_window = find_stationary_calibration(calib_acc, calib_gyro, calib_spd, sample_rate=round(1.0 / dt))
     bias_ax = bias_ay = bias_az = bias_gx = bias_gy = bias_gz = 0.0
     calibration_ok = calibration_window is not None
     if calibration_ok:
         cal_s, cal_e = calibration_window
         a_mean = calib_acc[cal_s:cal_e].mean(axis=0)
         w_mean = calib_gyro[cal_s:cal_e].mean(axis=0)
+        w_std = calib_gyro[cal_s:cal_e].std(axis=0)
+        max_spd = float(calib_spd[cal_s:cal_e].max())
         bias_ax, bias_ay, bias_az = float(a_mean[0]), float(a_mean[1]), float(a_mean[2] - 9.80665)
         bias_gx, bias_gy, bias_gz = map(float, w_mean)
-        print(f"[{output_filename}] Stationary calibration [{calib_t[cal_s]:.1f}s-{calib_t[cal_e-1]:.1f}s], "
-              f"gyro bias={np.degrees(np.linalg.norm(w_mean)):.2f} deg/s")
+        print(f"[{output_filename}] Verified stationary calibration [{calib_t[cal_s]:.1f}s-{calib_t[cal_e-1]:.1f}s] "
+              f"(max GPS speed={max_spd:.3f} m/s), gyro bias={np.degrees(np.linalg.norm(w_mean)):.2f} deg/s, "
+              f"gyro std={np.degrees(w_std).tolist()}")
     else:
-        print(f"[{output_filename}] No stationary calibration window found; leaving IMU biases uncorrected")
+        print(f"[{output_filename}] No stationary calibration window with GPS speed < 0.3 m/s found; leaving IMU biases uncorrected (honest uncalibrated)")
 
     ax_cal = ax_interp - bias_ax
     ay_cal = ay_interp - bias_ay
