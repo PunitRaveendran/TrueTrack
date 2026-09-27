@@ -6,7 +6,7 @@
   <title>TrueTrack | Neural-Inertial Navigation Instrument</title>
   <meta name="description" content="On-device neural-inertial dead reckoning and offline map-matching navigation instrument for GPS-denied urban corridors.">
   <link rel="stylesheet" href="lib/maplibre-gl.css">
-  <link rel="stylesheet" href="styles.css?v=round3_v3">
+  <link rel="stylesheet" href="styles.css?v=cockpit_v1">
 </head>
 <body class="instrument-root">
 
@@ -187,6 +187,33 @@
         <div class="chart-canvas-wrap">
           <canvas id="canvas-chart" class="error-canvas" width="380" height="180"></canvas>
           <div id="chart-tooltip" class="chart-tooltip" style="display:none;"></div>
+        </div>
+      </section>
+
+      <!-- THREE-TRACE LIVE COCKPIT — Panel A: Raw IMU 3-Channel (§6) -->
+      <section class="panel-section cockpit-trace-section">
+        <div class="cockpit-trace-header">
+          <div class="cockpit-trace-label">Panel A — Raw 50 Hz IMU input</div>
+          <span class="cockpit-trace-badge cockpit-badge-raw">RAW SENSOR</span>
+        </div>
+        <canvas id="canvas-cockpit-imu" class="cockpit-trace-canvas" width="380" height="80"></canvas>
+        <div class="cockpit-trace-legend">
+          <span class="cockpit-legend-item"><span class="cockpit-swatch" style="background:#f97316"></span>a<sub>x</sub></span>
+          <span class="cockpit-legend-item"><span class="cockpit-swatch" style="background:#8b94a2"></span>a<sub>y</sub></span>
+          <span class="cockpit-legend-item"><span class="cockpit-swatch" style="background:#a78bfa"></span>&omega;<sub>z</sub></span>
+        </div>
+      </section>
+
+      <!-- THREE-TRACE LIVE COCKPIT — Panel B: NPU Output (§6) -->
+      <section class="panel-section cockpit-trace-section">
+        <div class="cockpit-trace-header">
+          <div class="cockpit-trace-label">Panel B — NPU neural output</div>
+          <span class="cockpit-trace-badge cockpit-badge-npu">1D-CNN INFERENCE</span>
+        </div>
+        <canvas id="canvas-cockpit-npu" class="cockpit-trace-canvas" width="380" height="80"></canvas>
+        <div class="cockpit-trace-legend">
+          <span class="cockpit-legend-item"><span class="cockpit-swatch" style="background:#38bdf8"></span>Speed (km/h)</span>
+          <span class="cockpit-legend-item"><span class="cockpit-swatch" style="background:#10b981"></span>Yaw (&deg;/s)</span>
         </div>
       </section>
 
@@ -410,11 +437,23 @@
 
     <!-- Speed Selector & Keyboard Hint -->
     <div class="transport-right">
+      <!-- Continuous Playback Speed Slider (§7 Slider A) -->
+      <div class="slider-control-group">
+        <label class="slider-label" for="slider-speed">Speed</label>
+        <input type="range" id="slider-speed" class="cockpit-slider" min="0.25" max="4.0" step="0.25" value="1.0" title="Continuous playback speed (0.25x to 4x)">
+        <span class="slider-readout" id="slider-speed-readout">1.0x</span>
+      </div>
       <div class="speed-group">
         <button class="btn-speed active" data-speed="1.0">1x</button>
         <button class="btn-speed" data-speed="2.0">2x</button>
         <button class="btn-speed" data-speed="4.0">4x</button>
         <button class="btn-speed" data-speed="8.0">8x</button>
+      </div>
+      <!-- IMU Sampling Decimation Slider (§7 Slider B) -->
+      <div class="slider-control-group">
+        <label class="slider-label" for="slider-decimation" title="Model input resolution: controls how many IMU samples feed the 1D-CNN. Lower = fewer samples = more noise in NPU output.">Resolution</label>
+        <input type="range" id="slider-decimation" class="cockpit-slider" min="1" max="5" step="1" value="1" title="IMU decimation factor: 1=50Hz (full), 2=25Hz, 3=17Hz, 4=12.5Hz, 5=10Hz">
+        <span class="slider-readout" id="slider-decimation-readout">50Hz</span>
       </div>
       <div class="transport-keys-hint" title="Keyboard Shortcuts: Space to Play/Pause, ←/→ to scrub ±5s, 1/2/4/8 to set speed">
         <span class="key-badge">Space</span> <span class="key-badge">&larr;&rarr;</span> <span class="key-badge">1-8</span>
@@ -426,6 +465,6 @@
   <script src="lib/maplibre-gl.js"></script>
   <script src="js/corridor_data.js?v=round4"></script>
   <script src="js/real_telemetry.js?v=round4"></script>
-  <script src="js/navigation_engine.js?v=round4"></script>
+  <script src="js/navigation_engine.js?v=cockpit_v1"></script>
 </body>
 </html>

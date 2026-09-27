@@ -112,6 +112,9 @@ class TrueTrackCockpit {
     this.isDemoMode = false;
     this.demoStartTime = 0;
 
+    // Priority 2: Decimation & continuous speed
+    this.decimationFactor = 1;  // 1=50Hz, 2=25Hz, 3=17Hz, 4=12.5Hz, 5=10Hz
+
     // Component Ablation Toggles
     this.toggleNeural = true;
     this.toggleMap = true;
@@ -516,8 +519,43 @@ class TrueTrackCockpit {
         btn.classList.add('active');
         const spd = parseFloat(btn.dataset.speed || btn.getAttribute('data-speed'));
         this.playbackSpeed = isNaN(spd) ? 1.0 : spd;
+        // Sync continuous speed slider to match button
+        const sliderSpeed = document.getElementById('slider-speed');
+        const sliderSpeedReadout = document.getElementById('slider-speed-readout');
+        if (sliderSpeed && spd <= 4.0) {
+          sliderSpeed.value = spd;
+          if (sliderSpeedReadout) sliderSpeedReadout.textContent = `${spd.toFixed(1)}x`;
+        }
       });
     });
+
+    // §7 Slider A: Continuous Playback Speed (0.25x to 4.0x)
+    const sliderSpeed = document.getElementById('slider-speed');
+    const sliderSpeedReadout = document.getElementById('slider-speed-readout');
+    if (sliderSpeed) {
+      sliderSpeed.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        this.playbackSpeed = isNaN(val) ? 1.0 : val;
+        if (sliderSpeedReadout) sliderSpeedReadout.textContent = `${val.toFixed(val % 1 === 0 ? 0 : 2)}x`;
+        // Highlight closest discrete button
+        speedBtns.forEach(b => {
+          const bSpd = parseFloat(b.dataset.speed);
+          b.classList.toggle('active', Math.abs(bSpd - val) < 0.01);
+        });
+      });
+    }
+
+    // §7 Slider B: IMU Sampling Decimation (Model Input Resolution)
+    const sliderDec = document.getElementById('slider-decimation');
+    const sliderDecReadout = document.getElementById('slider-decimation-readout');
+    if (sliderDec) {
+      sliderDec.addEventListener('input', (e) => {
+        const factor = parseInt(e.target.value);
+        this.decimationFactor = isNaN(factor) ? 1 : factor;
+        const hzMap = { 1: '50Hz', 2: '25Hz', 3: '17Hz', 4: '12Hz', 5: '10Hz' };
+        if (sliderDecReadout) sliderDecReadout.textContent = hzMap[this.decimationFactor] || `${Math.round(50 / this.decimationFactor)}Hz`;
+      });
+    }
 
     // 2.4-Second Gentle Auto-Dismiss for Intro Overlay
     const intro = document.getElementById('intro-overlay');
@@ -864,6 +902,13 @@ class TrueTrackCockpit {
 
     this.canvasTimelineSpark = document.getElementById('canvas-timeline-spark');
     this.ctxTimelineSpark = this.canvasTimelineSpark ? this.canvasTimelineSpark.getContext('2d') : null;
+
+    // §6 Three-Trace Cockpit Canvases (always visible in side panel)
+    this.canvasCockpitImu = document.getElementById('canvas-cockpit-imu');
+    this.ctxCockpitImu = this.canvasCockpitImu ? this.canvasCockpitImu.getContext('2d') : null;
+
+    this.canvasCockpitNpu = document.getElementById('canvas-cockpit-npu');
+    this.ctxCockpitNpu = this.canvasCockpitNpu ? this.canvasCockpitNpu.getContext('2d') : null;
 
     this.chartTooltip = document.getElementById('chart-tooltip');
 
@@ -1249,6 +1294,11 @@ class TrueTrackCockpit {
 
     // Diagnostic Canvases
     this.drawErrorChart(i0);
+
+    // §6 Three-Trace Cockpit — always visible (not behind drawer)
+    this.drawCockpitImu(i0);
+    this.drawCockpitNpu(i0);
+
     if (this.drawerOpen) {
       this.drawImuWaveform(i0);
       this.drawFftSpectrum();
@@ -1650,6 +1700,212 @@ class TrueTrackCockpit {
       else ctx.lineTo(x, y);
     });
     ctx.stroke();
+  }
+
+  /* ========================================================================
+     §6. Three-Trace Cockpit: Panel A — Raw 3-Channel IMU Waveform
+     ======================================================================== */
+  drawCockpitImu(currentIdx) {
+    if (!this.ctxCockpitImu) return;
+    const ctx = this.ctxCockpitImu;
+    const w = this.canvasCockpitImu.width;
+    const h = this.canvasCockpitImu.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Subtle background grid
+    ctx.strokeStyle = '#151921';
+    ctx.lineWidth = 1;
+    // Horizontal center zero-line
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+
+    // Time-synced vertical grid lines (every 25 samples = 2.5s)
+    ctx.strokeStyle = '#181d26';
+    const gridCols = 4;
+    for (let c = 1; c < gridCols; c++) {
+      const gx = (c / gridCols) * w;
+      ctx.beginPath();
+      ctx.moveTo(gx, 0);
+      ctx.lineTo(gx, h);
+      ctx.stroke();
+    }
+
+    const windowSize = 100; // 100 frames = 10.0 seconds of trailing data
+    const decimation = this.decimationFactor || 1;
+    const start = Math.max(0, currentIdx - windowSize);
+    const rawSlice = this.telemetry.slice(start, currentIdx + 1);
+    if (rawSlice.length < 2) return;
+
+    // Apply decimation: keep every N-th sample
+    const slice = decimation <= 1 ? rawSlice : rawSlice.filter((_, i) => i % decimation === 0);
+    if (slice.length < 2) return;
+
+    const channels = [
+      { key: 'raw_imu_ax', color: '#f97316', scale: 12.0 },  // orange: longitudinal
+      { key: 'raw_imu_ay', color: '#94a3b8', scale: 12.0 },  // slate: lateral
+      { key: 'raw_imu_gz', color: '#a78bfa', scale: 0.15 }   // purple: yaw gyro (rad/s)
+    ];
+
+    channels.forEach(ch => {
+      ctx.beginPath();
+      ctx.strokeStyle = ch.color;
+      ctx.lineWidth = 1.25;
+      slice.forEach((d, i) => {
+        const x = (i / (slice.length - 1)) * w;
+        let val = d[ch.key] || 0;
+        if (this.highVibrationInjected) {
+          val += (ch.key === 'raw_imu_gz' ? 0.08 : 3.5) * Math.sin(2 * Math.PI * 29.93 * d.t);
+        }
+        const y = h / 2 - (val / ch.scale) * (h / 2 - 4);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    });
+
+    // Real-time instantaneous values readout (top-left)
+    const latest = rawSlice[rawSlice.length - 1];
+    if (latest) {
+      const axStr = (latest.raw_imu_ax >= 0 ? '+' : '') + (latest.raw_imu_ax || 0).toFixed(2);
+      const ayStr = (latest.raw_imu_ay >= 0 ? '+' : '') + (latest.raw_imu_ay || 0).toFixed(2);
+      const gzStr = (latest.raw_imu_gz >= 0 ? '+' : '') + (latest.raw_imu_gz || 0).toFixed(3);
+      ctx.fillStyle = '#64748b';
+      ctx.font = '9px "JetBrains Mono", Consolas, monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`a:[${axStr}, ${ayStr}] m/s²  ω:${gzStr} r/s`, 6, 11);
+    }
+
+    // Badge: "CHAOTIC · 50Hz RAW" top-right
+    ctx.fillStyle = 'rgba(249, 115, 22, 0.75)';
+    ctx.font = 'bold 8.5px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.textAlign = 'right';
+    const hzLabel = decimation > 1 ? `${Math.round(50 / decimation)}Hz SUB` : '50Hz RAW';
+    ctx.fillText(`CHAOTIC · ${hzLabel}`, w - 6, 11);
+
+    // Time baseline indicator (bottom)
+    ctx.fillStyle = '#475569';
+    ctx.font = '8px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('-10.0s', 6, h - 3);
+    ctx.textAlign = 'right';
+    ctx.fillText('t_now', w - 6, h - 3);
+  }
+
+  /* ========================================================================
+     §6. Three-Trace Cockpit: Panel B — NPU Neural Output Trace
+     ======================================================================== */
+  drawCockpitNpu(currentIdx) {
+    if (!this.ctxCockpitNpu) return;
+    const ctx = this.ctxCockpitNpu;
+    const w = this.canvasCockpitNpu.width;
+    const h = this.canvasCockpitNpu.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Subtle background grid
+    ctx.strokeStyle = '#151921';
+    ctx.lineWidth = 1;
+    // Centerline for yaw (0 deg/s)
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+
+    // Time-synced vertical grid lines (every 25 samples = 2.5s)
+    ctx.strokeStyle = '#181d26';
+    const gridCols = 4;
+    for (let c = 1; c < gridCols; c++) {
+      const gx = (c / gridCols) * w;
+      ctx.beginPath();
+      ctx.moveTo(gx, 0);
+      ctx.lineTo(gx, h);
+      ctx.stroke();
+    }
+
+    const windowSize = 100;
+    const decimation = this.decimationFactor || 1;
+    const start = Math.max(0, currentIdx - windowSize);
+    const rawSlice = this.telemetry.slice(start, currentIdx + 1);
+    if (rawSlice.length < 2) return;
+
+    // Apply decimation to source data
+    const slice = decimation <= 1 ? rawSlice : rawSlice.filter((_, i) => i % decimation === 0);
+    if (slice.length < 2) return;
+
+    // Noise injection proportional to decimation factor (quantization & undersampling degradation)
+    const noiseGain = (decimation - 1) * 0.35;
+
+    // 1. Speed trace (blue) — scale: 0–60 km/h maps to canvas bottom-to-top
+    ctx.beginPath();
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.75;
+    slice.forEach((d, i) => {
+      const x = (i / (slice.length - 1)) * w;
+      let val = d.pred_speed_kmh || 0;
+      if (noiseGain > 0) {
+        val += noiseGain * 2.8 * (Math.sin(i * 2.7 + d.t * 13.1) + 0.5 * Math.cos(i * 5.3));
+      }
+      const norm = Math.min(1.0, Math.max(0, val / 60.0));
+      const y = h - 6 - norm * (h - 12);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // 2. Yaw trace (green) — scale: -20 to +20 °/s centered at h/2
+    ctx.beginPath();
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 1.25;
+    slice.forEach((d, i) => {
+      const x = (i / (slice.length - 1)) * w;
+      let val = d.pred_yaw_deg_s || 0;
+      if (noiseGain > 0) {
+        val += noiseGain * 3.0 * Math.sin(i * 4.1 + d.t * 9.7);
+      }
+      const norm = Math.max(-1, Math.min(1, val / 20.0));
+      const y = h / 2 - norm * (h / 2 - 6);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Real-time instantaneous values readout (top-left)
+    const latest = rawSlice[rawSlice.length - 1];
+    if (latest) {
+      let curSpd = latest.pred_speed_kmh || 0;
+      let curYaw = latest.pred_yaw_deg_s || 0;
+      if (noiseGain > 0) {
+        curSpd += noiseGain * 2.8 * (Math.sin(rawSlice.length * 2.7) + 0.3);
+        curYaw += noiseGain * 3.0 * Math.sin(rawSlice.length * 4.1);
+      }
+      const yawStr = (curYaw >= 0 ? '+' : '') + curYaw.toFixed(1);
+      ctx.fillStyle = '#64748b';
+      ctx.font = '9px "JetBrains Mono", Consolas, monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`v:${Math.max(0, curSpd).toFixed(1)} km/h  ψ̇:${yawStr}°/s`, 6, 11);
+    }
+
+    // Badge: "SMOOTH · INFERENCE" (or "DEGRADED (XXHz)") top-right
+    if (decimation > 1) {
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.9)';
+      ctx.font = 'bold 8.5px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`DEGRADED · ${Math.round(50 / decimation)}Hz`, w - 6, 11);
+    } else {
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.85)';
+      ctx.font = 'bold 8.5px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('SMOOTH · 1D-CNN', w - 6, 11);
+    }
+
+    // Time baseline indicator (bottom)
+    ctx.fillStyle = '#475569';
+    ctx.font = '8px "JetBrains Mono", Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('-10.0s', 6, h - 3);
+    ctx.textAlign = 'right';
+    ctx.fillText('t_now', w - 6, h - 3);
   }
 
   drawFftSpectrum() {
