@@ -1172,10 +1172,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         // 7. Green Light Bridge: Broadcast live 10Hz simulation telemetry to laptop cockpit
         streamServer?.broadcastTelemetry(
-            timestampMs = f.timestampMs,
+            timestampMs = (f.t * 1000L).toLong(),
             speedKmh = f.speedKmh,
             yawRateDeg = (f.rawImuGz * 180f / Math.PI.toFloat()),
-            leanDeg = f.leanAngleDeg,
+            leanDeg = leanCorrector.currentPhiDeg,
             isBlackout = effBO,
             npuLatencyMs = lastInferenceLatencyMs,
             ax = f.rawImuAx,
