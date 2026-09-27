@@ -242,8 +242,10 @@ def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, outp
             naive_x = gt_enu_x[i]
             naive_y = gt_enu_y[i]
             naive_theta = gps_heading_math
-            naive_vx = spd_interp[i] * np.cos(naive_theta)
-            naive_vy = spd_interp[i] * np.sin(naive_theta)
+            v_entry = max(5.0, float(spd_interp[i]))
+            naive_speed = v_entry
+            naive_vx = naive_speed * np.cos(naive_theta)
+            naive_vy = naive_speed * np.sin(naive_theta)
 
             tt_x = gt_enu_x[i]
             tt_y = gt_enu_y[i]
@@ -283,18 +285,13 @@ def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, outp
             # === BLACKOUT ACTIVE: PURE CUMULATIVE PROPAGATION ===
             # ZERO ground-truth coordinates are referenced here.
 
-            # 1. Naive Classical INS (Double-Integration with physical vehicle constraints)
+            # 1. Naive Classical INS (Forward Velocity + Gyro Heading Dead-Reckoning)
             naive_theta += gz_cal[i] * dt
             mount_pitch_leak = float(np.mean(ax_cal[max(0, blk_idx_start-50):blk_idx_start]))
-            a_fwd = np.clip(ax_cal[i] - mount_pitch_leak, -2.5, 2.5)
-            a_east = a_fwd * np.cos(naive_theta)
-            a_north = a_fwd * np.sin(naive_theta)
-            naive_vx += a_east * dt
-            naive_vy += a_north * dt
-            naive_speed = float(np.hypot(naive_vx, naive_vy))
-            if naive_speed > 16.0:  # Realistic two-wheeler speed ceiling (~58 km/h)
-                naive_vx = (naive_vx / naive_speed) * 16.0
-                naive_vy = (naive_vy / naive_speed) * 16.0
+            a_fwd = np.clip(ax_cal[i] - mount_pitch_leak, -1.5, 1.5)
+            naive_speed = float(np.clip(naive_speed + a_fwd * dt, max(4.0, v_entry * 0.6), min(18.0, v_entry * 1.4)))
+            naive_vx = naive_speed * np.cos(naive_theta)
+            naive_vy = naive_speed * np.sin(naive_theta)
             naive_x += naive_vx * dt
             naive_y += naive_vy * dt
             current_naive_lat, current_naive_lon = enu_to_geodetic(naive_x, naive_y, lat0, lon0)
