@@ -22,6 +22,7 @@
 8. [Running the Interactive Web Simulation Cockpit](#8-running-the-interactive-web-simulation-cockpit)
 9. [Edge Deployment & Snapdragon NPU Specs](#9-edge-deployment--snapdragon-npu-specs)
 10. [Engineering Transparency & 30-Hour On-Ground iQOO Build Roadmap](#10-engineering-transparency--30-hour-on-ground-iqoo-build-roadmap)
+11. [Native Android Application (On-Device Cockpit & Flight Recorder)](#11-native-android-application-on-device-cockpit--flight-recorder)
 
 ---
 
@@ -431,6 +432,54 @@ gantt
   1. **Live Phone Screen Mirroring:** High-framerate USB-C DisplayPort / `scrcpy` feed displaying the live iQOO phone screen alongside real-time NPU inference latency and IMU waveforms.
   2. **Live Failover Demonstration:** Toggling off Android Location/GNSS in real time while translating and rotating the phone on the demo table; demonstrating continuous, drift-bounded neural dead reckoning locked to the road network with zero satellite fix and zero cellular connectivity.
   3. **Interactive Code & Weights Walkthrough:** Presenting the 103.7 KB ONNX model, QNN execution graphs, and reproducible evaluation metrics.
+
+---
+
+## 11. Native Android Application (On-Device Cockpit & Flight Recorder)
+
+TrueTrack features a native production-grade Android application engineered for on-device execution on **Qualcomm Snapdragon** hardware, eliminating the need for a tethered laptop.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│               TrueTrack Native Android Application                     │
+│               com.truetrack.navigation.MainActivity                    │
+├──────────────────────────┬──────────────────────────┬──────────────────┤
+│  Hexagon NNAPI Inference │  Live Diagnostics HUD    │  Offline Routing │
+│  • ONNX Runtime INT8     │  • Artificial Horizon    │  • A* Search     │
+│  • 1.4 – 5.5 ms Latency  │  • Roll Lean Needle      │  • 1076 Nodes    │
+│  • Zero Cloud Telemetry  │  • Gyro Bias Calibration │  • 0% Cell Data  │
+└──────────────────────────┴──────────────────────────┴──────────────────┘
+```
+
+### Key Modules & Capabilities
+
+1. **Snapdragon Hexagon NPU Acceleration:**
+   - Evaluates the 1D-CNN temporal convolutional network at 50 Hz via the **ONNX Runtime NNAPI / Hexagon Execution Provider**, delivering deterministic sub-6 ms inference.
+2. **On-Device Flight Recorder (Diagnostics Overlay):**
+   - **Visual Artificial Horizon & Lean Needle:** Real-time bank angle readout driven by `LeanCorrector.currentPhiDeg`, rotating a central horizon dial with degree and direction indicators (`LEAN: 2.3° (LEFT)`).
+   - **Per-Route Gyro Bias Display:** Visual confirmation of stationary IMU calibration (e.g. `+0.0933 rad/s` for Varadarajapuram) subtracting DC offsets in real time.
+   - **Kinematics & Acceleration Norm:** Live raw $|a|$ magnitude in $G$ and $\text{m/s}^2$, vehicle speed, and compass heading with 8-point cardinal bearings.
+   - **Interactive Blackout Simulator ("KILL GPS"):** Instant trigger simulating sudden GNSS denial, rendering the unassisted INS drift trajectory (red) vs. TrueTrack corridor-clamped state (blue).
+3. **P2P Fleet & Party Sharing:**
+   - Real-time offline multi-rider mesh broadcasting over Bluetooth Low Energy & Wi-Fi Direct via Google Nearby Connections and ZXing QR pairing.
+4. **Built-in Offline A\* Graph Router:**
+   - 1,076-node offline road network graph bundled as a local asset (`demo_road_graph.json`) providing instant offline navigation without internet access.
+
+### Building & Installing
+
+```bash
+# Navigate to the Android project root
+cd android_app
+
+# Compile Debug APK using Android Studio JBR
+./gradlew assembleDebug
+
+# Install directly to a connected Snapdragon / iQOO device
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+# Launch MainActivity
+adb shell am start -n com.truetrack.navigation/.MainActivity
+```
 
 ---
 
