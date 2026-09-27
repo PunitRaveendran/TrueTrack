@@ -140,6 +140,9 @@ class TrueTrackCockpit {
     this.demoPois = null;
     this.activePoiRoute = null;
 
+    // Priority 2: Decimation & continuous speed
+    this.decimationFactor = 1;  // 1=50Hz, 2=25Hz, 3=17Hz, 4=12.5Hz, 5=10Hz
+
     // Component Ablation Toggles
     this.toggleNeural = true;
     this.toggleMap = true;
@@ -153,6 +156,9 @@ class TrueTrackCockpit {
 
     // State Tracking
     this.prevBlackoutState = false;
+
+    // Priority 1: dirty-check key for the always-visible three-trace strip
+    this.lastTraceKey = -1;
 
     // Initialize Subsystems
     this.initMap();
@@ -597,11 +603,10 @@ class TrueTrackCockpit {
         speedBtns.forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         const spd = parseFloat(btn.dataset.speed || btn.getAttribute('data-speed'));
-        this.playbackSpeed = isNaN(spd) ? 1.0 : spd;
-        const contSlider = document.getElementById('slider-continuous-speed');
-        const contVal = document.getElementById('val-continuous-speed');
+        const contSlider = document.getElementById('slider-continuous-speed') || document.getElementById('slider-speed');
+        const contVal = document.getElementById('val-continuous-speed') || document.getElementById('slider-speed-readout');
         if (contSlider) contSlider.value = this.playbackSpeed;
-        if (contVal) contVal.textContent = `${this.playbackSpeed.toFixed(1)}×`;
+        if (contVal) contVal.textContent = `${this.playbackSpeed.toFixed(1)}x`;
       });
     });
 
@@ -1064,6 +1069,21 @@ class TrueTrackCockpit {
     this.canvasTimelineSpark = document.getElementById('canvas-timeline-spark');
     this.ctxTimelineSpark = this.canvasTimelineSpark ? this.canvasTimelineSpark.getContext('2d') : null;
 
+    // Priority 1: Three-trace strip canvases (raw IMU vs NPU output)
+    this.canvasImuTrace = document.getElementById('canvas-imu-trace') || document.getElementById('canvas-cockpit-imu');
+    this.ctxImuTrace = this.canvasImuTrace ? this.canvasImuTrace.getContext('2d') : null;
+
+    this.canvasNpuTrace = document.getElementById('canvas-npu-trace') || document.getElementById('canvas-cockpit-npu');
+    this.ctxNpuTrace = this.canvasNpuTrace ? this.canvasNpuTrace.getContext('2d') : null;
+
+    this.canvasCockpitImu = document.getElementById('canvas-cockpit-imu') || document.getElementById('canvas-imu-trace');
+    this.ctxCockpitImu = this.canvasCockpitImu ? this.canvasCockpitImu.getContext('2d') : null;
+
+    this.canvasCockpitNpu = document.getElementById('canvas-cockpit-npu') || document.getElementById('canvas-npu-trace');
+    this.ctxCockpitNpu = this.canvasCockpitNpu ? this.canvasCockpitNpu.getContext('2d') : null;
+
+    this.traceClock = document.getElementById('trace-clock');
+
     this.chartTooltip = document.getElementById('chart-tooltip');
 
     // Chart mouse hover crosshair & tooltip listener
@@ -1301,6 +1321,18 @@ class TrueTrackCockpit {
     if (gpsDot) gpsDot.classList.toggle('lost', isBlackout);
     if (gpsLabel) gpsLabel.textContent = isBlackout ? 'GPS blackout (simulated)' : 'GPS locked (simulated)';
 
+    // Priority 1: shared trace-strip clock (same playback time as the drift-chart needle)
+    if (this.traceClock) {
+      if (isBlackout) {
+        const boElapsed = frame.manualElapsedSec > 0
+          ? Math.floor(frame.manualElapsedSec)
+          : Math.max(0, Math.floor(cur.t - 40.0));
+        this.traceClock.textContent = 't = ' + cur.t.toFixed(1) + ' s \u00b7 blackout, ' + boElapsed + ' s in';
+      } else {
+        this.traceClock.textContent = 't = ' + cur.t.toFixed(1) + ' s \u00b7 GPS locked';
+      }
+    }
+
     // 3. Blackout Transition Audio Cues & Banner
     if (isBlackout !== this.prevBlackoutState) {
       if (isBlackout) {
@@ -1491,10 +1523,14 @@ class TrueTrackCockpit {
     }
 
     // Diagnostic & Synchronized Three-Trace Canvases (Task 1.6 & 1.7)
-    this.drawErrorChart(i0);
-    this.drawImuWaveform(i0);
-    this.drawNpuTrace(i0);
-    this.updateLeanLightbar(cur);
+    // §6 Three-Trace Cockpit — always visible (not behind drawer)
+    this.drawCockpitImu(i0);
+    this.drawCockpitNpu(i0);
+    if (typeof this.drawImuTrace === 'function') {
+      const traceIdx = Math.floor(this.currentIndex);
+      this.drawImuTrace(traceIdx);
+    }
+    if (typeof this.updateLeanLightbar === 'function') this.updateLeanLightbar(cur);
     if (this.drawerOpen) {
       this.drawFftSpectrum();
     }
@@ -1860,7 +1896,284 @@ class TrueTrackCockpit {
   }
 
   /* ========================================================================
-     Three-Trace Synchronized View: Trace 1 (50 Hz Raw IMU Waveforms)
+     9c. Priority 1 - Three-Trace Live Cockpit Strip
+     Panel A = raw 3-channel IMU input (chaotic)  |  Panel B = NPU output (smooth)
+     Both panels are drawn on the drift chart's time domain (0 -> 130 s), use the
+     same 38 px / 64 px insets, the same 15 s tick grid and the same live needle.
+     ======================================================================== */
+
+  /* Raw IMU channel table. Ranges are nominal display scales chosen from the
+     recorded telemetry (ax/ay p95 ~= 3.5 m/s^2, gz p95 ~= 0.066 rad/s).
+     vibAmp is the injected 29.9 Hz engine-vibration fault amplitude and matches
+     the 3.5 m/s^2 previously hard-coded for ay in the drawer trace. */
+  imuChannelTable() {
+    return [
+      { key: 'raw_imu_ax', label: 'ax', color: '#8b94a2', range: 5.0, decimals: 2, vibAmp: 3.5 },
+      { key: 'raw_imu_ay', label: 'ay', color: '#e2e8f0', range: 5.0, decimals: 2, vibAmp: 3.5 },
+      { key: 'raw_imu_gz', label: 'gz', color: '#d97706', range: 0.15, decimals: 3, vibAmp: 0.10 }
+    ];
+  }
+
+  /* Reads one raw IMU sample for a channel, applying the injected vibration fault */
+  imuSample(d, ch) {
+    let val = (d && typeof d[ch.key] === 'number' && isFinite(d[ch.key])) ? d[ch.key] : 0.0;
+    if (this.highVibrationInjected) {
+      val += ch.vibAmp * Math.sin(2 * Math.PI * 29.93 * d.t);
+    }
+    return val;
+  }
+
+  /* Dirty-check key: the strip only needs one redraw per new 10 Hz sample,
+     not one per 60 FPS animation frame. */
+  traceStripKey(idx) {
+    return idx * 2 + (this.highVibrationInjected ? 1 : 0);
+  }
+
+  /* Shared strip geometry: identical insets and time domain to the drift chart,
+     so tick fractions and the needle stay aligned across both panels. */
+  traceAxisGeometry(w, h) {
+    const total = this.telemetry.length;
+    if (total < 2) return null;
+
+    const padLeft = 38;
+    const padRight = 64;
+    const padTop = 12;
+    const padBottom = 16;
+    const plotW = Math.max(10, w - padLeft - padRight);
+    const plotH = Math.max(10, h - padTop - padBottom);
+    const totalTime = this.telemetry[total - 1].t || 110.0;
+
+    return {
+      padLeft,
+      padRight,
+      padTop,
+      padBottom,
+      plotW,
+      plotH,
+      total,
+      totalTime,
+      getXForTime: (t) => padLeft + (t / totalTime) * plotW,
+      getXForIndex: (i) => padLeft + (i / (total - 1)) * plotW
+    };
+  }
+
+  /* Shared timeline furniture: 45 s blackout band, 15 s ticks, baseline, needle */
+  drawTraceTimeline(ctx, geo, h, currentIdx) {
+    const y0 = geo.padTop;
+    const y1 = geo.padTop + geo.plotH;
+
+    // 45 s underpass blackout band (identical span and tint to the drift chart)
+    const boX1 = geo.getXForTime(40.0);
+    const boX2 = geo.getXForTime(85.0);
+    ctx.fillStyle = 'rgba(217, 119, 6, 0.10)';
+    ctx.fillRect(boX1, y0, Math.max(0, boX2 - boX1), geo.plotH);
+
+    // 15 s ticks with second labels (same x domain as the drift chart)
+    ctx.strokeStyle = '#1e232c';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#788294';
+    ctx.font = '9.5px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.textAlign = 'center';
+    [0, 15, 30, 45, 60, 75, 90, 105, 120].forEach(tVal => {
+      if (tVal > geo.totalTime) return;
+      const x = geo.getXForTime(tVal);
+      ctx.beginPath();
+      ctx.moveTo(x, y1);
+      ctx.lineTo(x, y1 + 4);
+      ctx.stroke();
+      ctx.fillText(tVal + 's', x, y1 + 13);
+    });
+
+    // Baseline
+    ctx.strokeStyle = '#272d38';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(geo.padLeft, y1);
+    ctx.lineTo(geo.padLeft + geo.plotW, y1);
+    ctx.stroke();
+
+    // Live playback needle (identical style to the drift chart cursor)
+    const curX = geo.getXForIndex(currentIdx);
+    ctx.strokeStyle = '#f1f3f7';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(curX, y0);
+    ctx.lineTo(curX, y1);
+    ctx.stroke();
+  }
+
+  /* Resolves vertical collisions between the right-hand live value labels */
+  stackEndLabels(items, topLimit, bottomLimit, minGap = 11) {
+    const sorted = items.slice().sort((a, b) => a.y - b.y);
+    let prev = -Infinity;
+    sorted.forEach(it => {
+      it.ly = Math.min(bottomLimit, Math.max(topLimit, Math.max(it.y, prev + minGap)));
+      prev = it.ly;
+    });
+    for (let i = sorted.length - 1; i > 0; i--) {
+      if (sorted[i].ly - sorted[i - 1].ly < minGap) {
+        sorted[i - 1].ly = sorted[i].ly - minGap;
+      }
+    }
+    return sorted;
+  }
+
+  /* Panel A: always-visible raw 3-channel IMU input trace */
+  drawImuTrace(currentIdx) {
+    if (!this.ctxImuTrace || !this.canvasImuTrace) return;
+    const ctx = this.ctxImuTrace;
+    const w = this.canvasImuTrace.width;
+    const h = this.canvasImuTrace.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    const geo = this.traceAxisGeometry(w, h);
+    if (!geo) return;
+
+    this.drawTraceTimeline(ctx, geo, h, currentIdx);
+
+    const mid = geo.padTop + geo.plotH / 2;
+    const half = geo.plotH / 2 - 1;
+    const yMin = geo.padTop;
+    const yMax = geo.padTop + geo.plotH;
+
+    // Zero reference line for the centred inertial channels
+    ctx.strokeStyle = '#1e222b';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(geo.padLeft, mid);
+    ctx.lineTo(geo.padLeft + geo.plotW, mid);
+    ctx.stroke();
+
+    const labels = [];
+    this.imuChannelTable().forEach(ch => {
+      ctx.beginPath();
+      ctx.strokeStyle = ch.color;
+      ctx.lineWidth = 1;
+      let last = 0.0;
+      for (let i = 0; i <= currentIdx; i++) {
+        const d = this.telemetry[i];
+        if (!d) break;
+        const val = this.imuSample(d, ch);
+        const x = geo.getXForIndex(i);
+        const y = Math.max(yMin, Math.min(yMax, mid - (val / ch.range) * half));
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+        last = val;
+      }
+      ctx.stroke();
+
+      labels.push({
+        color: ch.color,
+        y: Math.max(yMin + 9, Math.min(yMax, mid - (last / ch.range) * half + 3.5)),
+        text: ch.label + ' ' + last.toFixed(ch.decimals)
+      });
+    });
+
+    // Right-hand live value labels (same convention as the drift chart end labels)
+    ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.textAlign = 'left';
+    const labelX = geo.padLeft + geo.plotW + 6;
+    this.stackEndLabels(labels, yMin + 9, yMax).forEach(it => {
+      ctx.fillStyle = it.color;
+      ctx.fillText(it.text, labelX, it.ly);
+    });
+  }
+  /* Panel B: always-visible NPU output trace (speed lane + yaw-rate lane) */
+  drawNpuTrace(currentIdx) {
+    if (!this.ctxNpuTrace || !this.canvasNpuTrace) return;
+    const ctx = this.ctxNpuTrace;
+    const w = this.canvasNpuTrace.width;
+    const h = this.canvasNpuTrace.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    const geo = this.traceAxisGeometry(w, h);
+    if (!geo) return;
+
+    this.drawTraceTimeline(ctx, geo, h, currentIdx);
+
+    // Lane scales taken from the recorded telemetry (speed 1.6 -> 45.8 km/h, yaw -2.7 -> 1.8 deg/s)
+    const SPEED_MAX = 50.0;
+    const YAW_MAX = 3.0;
+    const laneGap = 5;
+    const laneH = (geo.plotH - laneGap) / 2;
+
+    const speedBase = geo.padTop + laneH;
+    const speedScale = (laneH - 3) / SPEED_MAX;
+    const yawMid = speedBase + laneGap + laneH / 2;
+    const yawScale = (laneH / 2 - 1) / YAW_MAX;
+    const yawTop = speedBase + laneGap + 1;
+    const yawBottom = geo.padTop + geo.plotH;
+
+    // Lane rules (speed 0 km/h baseline, yaw 0 deg/s centre line)
+    ctx.strokeStyle = '#1e222b';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(geo.padLeft, speedBase);
+    ctx.lineTo(geo.padLeft + geo.plotW, speedBase);
+    ctx.moveTo(geo.padLeft, yawMid);
+    ctx.lineTo(geo.padLeft + geo.plotW, yawMid);
+    ctx.stroke();
+
+    const labels = [];
+
+    // Speed lane: neural velocity regression
+    ctx.beginPath();
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.4;
+    let lastSpeed = 0.0;
+    for (let i = 0; i <= currentIdx; i++) {
+      const d = this.telemetry[i];
+      if (!d) break;
+      const spd = (typeof d.pred_speed_kmh === 'number' && isFinite(d.pred_speed_kmh)) ? d.pred_speed_kmh : 0.0;
+      const x = geo.getXForIndex(i);
+      const y = Math.max(geo.padTop, Math.min(speedBase, speedBase - spd * speedScale));
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+      lastSpeed = spd;
+    }
+    ctx.stroke();
+    labels.push({
+      color: '#38bdf8',
+      y: Math.max(geo.padTop + 9, Math.min(speedBase, speedBase - lastSpeed * speedScale + 3.5)),
+      text: lastSpeed.toFixed(1) + ' km/h'
+    });
+
+    // Yaw-rate lane: neural angular-rate regression
+    ctx.beginPath();
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 1.4;
+    let lastYaw = 0.0;
+    for (let i = 0; i <= currentIdx; i++) {
+      const d = this.telemetry[i];
+      if (!d) break;
+      const yaw = (typeof d.pred_yaw_deg_s === 'number' && isFinite(d.pred_yaw_deg_s)) ? d.pred_yaw_deg_s : 0.0;
+      const x = geo.getXForIndex(i);
+      const y = Math.max(yawTop, Math.min(yawBottom, yawMid - yaw * yawScale));
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+      lastYaw = yaw;
+    }
+    ctx.stroke();
+    labels.push({
+      color: '#10b981',
+      y: Math.max(yawTop, Math.min(yawBottom, yawMid - lastYaw * yawScale + 3.5)),
+      text: lastYaw.toFixed(2) + ' \u00b0/s'
+    });
+
+    // Right-hand live value labels
+    ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.textAlign = 'left';
+    const labelX = geo.padLeft + geo.plotW + 6;
+    this.stackEndLabels(labels, geo.padTop + 9, geo.padTop + geo.plotH).forEach(it => {
+      ctx.fillStyle = it.color;
+      ctx.fillText(it.text, labelX, it.ly);
+    });
+  }
+
+  /* Drawer diagnostics: rolling sample trace of all three raw IMU channels
+     (ax, ay, gz) in three colours, using the same nominal scales as Panel A.
      ======================================================================== */
   drawImuWaveform(currentIdx) {
     if (!this.ctxWave || !this.canvasWave) return;
@@ -1878,10 +2191,27 @@ class TrueTrackCockpit {
     ctx.lineTo(w, h / 2);
     ctx.stroke();
 
-    const windowSize = this.sampleWindowSize || 50;
+    // Rolling sample window
+    const windowSize = this.sampleWindowSize || 80;
     const start = Math.max(0, currentIdx - windowSize);
     const slice = this.telemetry.slice(start, currentIdx + 1);
     if (slice.length < 2) return;
+
+    const mid = h / 2;
+    const half = h / 2 - 6;
+    this.imuChannelTable().forEach(ch => {
+      ctx.beginPath();
+      ctx.strokeStyle = ch.color;
+      ctx.lineWidth = 1;
+      slice.forEach((d, i) => {
+        const val = this.imuSample(d, ch);
+        const x = (i / windowSize) * w;
+        const y = Math.max(0, Math.min(h, mid - (val / ch.range) * half));
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    });
 
     // 1. Channel 1: ax (Forward Acceleration) - Cyan #38bdf8
     ctx.beginPath();

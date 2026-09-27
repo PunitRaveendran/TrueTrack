@@ -2,7 +2,7 @@
 
 [![Track: Open Innovation](https://img.shields.io/badge/Track-Open%20Innovation%20(Local%20AI)-blueviolet)](https://github.com/)
 [![Target: Snapdragon NPU](https://img.shields.io/badge/Hardware-Snapdragon%20Hexagon%20NPU-red)](https://www.qualcomm.com/products/mobile/snapdragon)
-[![Model Footprint](https://img.shields.io/badge/Model%20Size-103.7%20KB%20(ONNX)-brightgreen)](ml_engine/truetrack_model.onnx)
+[![Model Footprint](https://img.shields.io/badge/Model%20Size-123.7%20KB%20(ONNX)-brightgreen)](ml_engine/truetrack_model.onnx)
 [![Latency](https://img.shields.io/badge/Inference-1.4ms%20(INT8)-orange)](ml_engine/npu_model_spec.json)
 [![Language](https://img.shields.io/badge/Python-3.9%20|%203.10%20|%203.11%20|%203.12%20|%203.13-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -308,7 +308,7 @@ Then open your browser and navigate to:
 ### Phase 0 vs. On-Ground Scope Demarcation
 To maintain absolute intellectual honesty:
 * **Current Pre-Screening Repository (Phase 0):** Represents the **validated algorithmic prototype, trained neural network weights, empirical Chennai drive log analysis, and self-contained interactive evaluation console**.
-  - **Hardware Testbed Demarcation:** Preliminary two-wheeler field recordings were gathered on an available Android test smartphone (Samsung Galaxy M35 5G) mounted on the handlebar prior to hackathon loaner's arrival. Road dynamics (ISO 8608 roughness, 9g pothole shocks, 22.1° cornering bank) are vehicle-level physics that transfer across Android chassis.
+  - **Hardware Testbed Demarcation:** Preliminary two-wheeler field recordings were gathered on an available Android test smartphone (Samsung Galaxy M35 5G) mounted on the handlebar prior to hackathon loaner arrival. Road dynamics (ISO 8608 roughness, 9g pothole shocks, 22.1° cornering bank) are vehicle-level physics that transfer across Android chassis.
   - **Geographical Demarcation:** Physical validation rides were logged in **Chennai** (`Varadarajapuram` underpass/flyover, `Rohini Theatre Koyambedu` flyover, and `45_46` urban roads). The flight recorder cockpit models the **Hyderabad HITEC City Mindspace Underpass** surveyed OSM manifold, demonstrating cross-city generalizability across Indian grade-separated infrastructure.
   - **Deterministic 50 Hz Resampling Pipeline:** Multi-sensor streams recorded at ~60.8 Hz with OS jitter are deterministically resampled onto a uniform 50.0 Hz grid (`load_real_imu_data.py`) before tensor windowing (`[1, 6, 50]`), eliminating time dilation.
   - **Broadband Vibration Rationale:** Observed engine peaks shift from 15.3–16.7 Hz (chassis resonance) to 21.6 Hz (idle) and 29.9 Hz (cruise). This dynamic variance mathematically justifies our 1D-CNN temporal receptive field over brittle single-frequency notch filters.

@@ -19,6 +19,7 @@ import android.hardware.SensorManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.location.Location
 import android.location.LocationListener
@@ -2216,3 +2217,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         executor.shutdown()
     }
 }
+
+
+
+

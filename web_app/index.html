@@ -84,7 +84,8 @@
   <!-- Main Viewport Layout (1920x1080 Zero-Scroll Grid) -->
   <main class="viewport-layout">
 
-    <!-- Left Column: Edge-to-Edge Map -->
+    <!-- Left Column: Edge-to-Edge Map + always-visible three-trace strip -->
+    <section class="map-column">
     <section class="map-viewport-container">
       <div id="maplibre-map" class="map-canvas"></div>
       <div class="map-vignette-overlay" pointer-events="none"></div>
@@ -194,6 +195,53 @@
         <div class="legend-row"><span class="legend-swatch swatch-gt"></span> Ground truth / full corridor</div>
         <div class="legend-row"><span class="legend-swatch swatch-tunnel"></span> 45 s underpass zone</div>
       </div>
+    </section>
+
+    <!-- ==================================================================
+         PRIORITY 1: THREE-TRACE LIVE COCKPIT VISUALIZATION (Spec section 6)
+         Panel A (raw IMU input, chaotic) and Panel B (NPU output, smooth) live
+         outside the diagnostics drawer, so all three panels (A, B and the map
+         puck) are visible simultaneously during live playback. Both canvases
+         share the drift chart's time domain (0-130 s), 15 s tick grid and the
+         live playback needle.
+         ================================================================== -->
+    <section class="trace-strip" id="trace-strip">
+
+      <!-- Panel A: raw 6-axis IMU input, 3 channels in 3 colours (vibration-visible) -->
+      <div class="trace-panel">
+        <div class="trace-head">
+          <span class="trace-title">Panel A &mdash; Raw IMU input</span>
+          <span class="trace-badge trace-badge-chaotic">raw sensor stream &bull; chaotic</span>
+          <span class="trace-scales">ax, ay &plusmn;5 m/s&sup2; &bull; gz &plusmn;0.15 rad/s</span>
+          <div class="trace-legend">
+            <span class="trace-key"><i class="trace-swatch swatch-ax"></i>ax</span>
+            <span class="trace-key"><i class="trace-swatch swatch-ay"></i>ay</span>
+            <span class="trace-key"><i class="trace-swatch swatch-gz"></i>gz</span>
+          </div>
+        </div>
+        <canvas id="canvas-imu-trace" class="trace-canvas" width="1520" height="88"></canvas>
+      </div>
+
+      <!-- Panel B: neural NPU output, speed + yaw-rate regression (smooth) -->
+      <div class="trace-panel">
+        <div class="trace-head">
+          <span class="trace-title">Panel B &mdash; NPU output</span>
+          <span class="trace-badge trace-badge-neural">1D-CNN regression &bull; smooth</span>
+          <span class="trace-scales">speed 0&ndash;50 km/h &bull; yaw rate &plusmn;3 &deg;/s</span>
+          <div class="trace-legend">
+            <span class="trace-key"><i class="trace-swatch swatch-speed"></i>speed</span>
+            <span class="trace-key"><i class="trace-swatch swatch-yaw"></i>yaw</span>
+          </div>
+        </div>
+        <canvas id="canvas-npu-trace" class="trace-canvas" width="1520" height="88"></canvas>
+      </div>
+
+      <!-- Shared timeline footer (panel C is the map puck above) -->
+      <div class="trace-axis-footer">
+        <span class="trace-axis-note">Panel C: map puck above &bull; shared time axis with the drift chart (0&ndash;130 s &bull; 15 s ticks &bull; live needle)</span>
+        <span class="trace-clock" id="trace-clock">t = 0.0 s &bull; GPS locked</span>
+      </div>
+    </section>
     </section>
 
     <!-- Right Column: Precision Readouts & Controls -->
@@ -315,6 +363,33 @@
         <div class="chart-canvas-wrap">
           <canvas id="canvas-chart" class="error-canvas" width="380" height="180"></canvas>
           <div id="chart-tooltip" class="chart-tooltip" style="display:none;"></div>
+        </div>
+      </section>
+
+      <!-- THREE-TRACE LIVE COCKPIT — Panel A: Raw IMU 3-Channel (§6) -->
+      <section class="panel-section cockpit-trace-section">
+        <div class="cockpit-trace-header">
+          <div class="cockpit-trace-label">Panel A — Raw 50 Hz IMU input</div>
+          <span class="cockpit-trace-badge cockpit-badge-raw">RAW SENSOR</span>
+        </div>
+        <canvas id="canvas-cockpit-imu" class="cockpit-trace-canvas" width="380" height="80"></canvas>
+        <div class="cockpit-trace-legend">
+          <span class="cockpit-legend-item"><span class="cockpit-swatch" style="background:#f97316"></span>a<sub>x</sub></span>
+          <span class="cockpit-legend-item"><span class="cockpit-swatch" style="background:#8b94a2"></span>a<sub>y</sub></span>
+          <span class="cockpit-legend-item"><span class="cockpit-swatch" style="background:#a78bfa"></span>&omega;<sub>z</sub></span>
+        </div>
+      </section>
+
+      <!-- THREE-TRACE LIVE COCKPIT — Panel B: NPU Output (§6) -->
+      <section class="panel-section cockpit-trace-section">
+        <div class="cockpit-trace-header">
+          <div class="cockpit-trace-label">Panel B — NPU neural output</div>
+          <span class="cockpit-trace-badge cockpit-badge-npu">1D-CNN INFERENCE</span>
+        </div>
+        <canvas id="canvas-cockpit-npu" class="cockpit-trace-canvas" width="380" height="80"></canvas>
+        <div class="cockpit-trace-legend">
+          <span class="cockpit-legend-item"><span class="cockpit-swatch" style="background:#38bdf8"></span>Speed (km/h)</span>
+          <span class="cockpit-legend-item"><span class="cockpit-swatch" style="background:#10b981"></span>Yaw (&deg;/s)</span>
         </div>
       </section>
 
@@ -626,6 +701,12 @@
         <button class="btn-speed" data-speed="2.0">2x</button>
         <button class="btn-speed" data-speed="4.0">4x</button>
         <button class="btn-speed" data-speed="8.0">8x</button>
+      </div>
+      <!-- IMU Sampling Decimation Slider (§7 Slider B) -->
+      <div class="slider-control-group">
+        <label class="slider-label" for="slider-decimation" title="Model input resolution: controls how many IMU samples feed the 1D-CNN. Lower = fewer samples = more noise in NPU output.">Resolution</label>
+        <input type="range" id="slider-decimation" class="cockpit-slider" min="1" max="5" step="1" value="1" title="IMU decimation factor: 1=50Hz (full), 2=25Hz, 3=17Hz, 4=12.5Hz, 5=10Hz">
+        <span class="slider-readout" id="slider-decimation-readout">50Hz</span>
       </div>
       <div class="transport-keys-hint" title="Keyboard Shortcuts: Space to Play/Pause, ←/→ to scrub ±5s, 1/2/4/8 to set speed">
         <span class="key-badge">Space</span> <span class="key-badge">&larr;&rarr;</span> <span class="key-badge">1-8</span>
