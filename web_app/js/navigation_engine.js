@@ -971,6 +971,10 @@ class TrueTrackCockpit {
       metaEl.textContent = `ax: ${data.ax.toFixed(2)} • ay: ${data.ay.toFixed(2)} • lean: ${data.lean.toFixed(1)}° • NPU: ${data.latency.toFixed(1)}ms`;
     }
 
+    if (data.lean !== undefined) {
+      this.updateLeanLightbar({ raw_imu_ay: 0, lean_deg: data.lean });
+    }
+
     // Direct on-device autonomous dead reckoning marker sync
     if (data.lat !== undefined && data.lon !== undefined && this.map && this.mapLoaded && this.carMarker) {
       this.carMarker.setLngLat([data.lon, data.lat]);
@@ -2043,9 +2047,23 @@ class TrueTrackCockpit {
      ======================================================================== */
   updateLeanLightbar(cur) {
     if (!cur) return;
-    const ay = cur.raw_imu_ay || 0.0;
-    let leanDeg = (ay / 9.81) * (180.0 / Math.PI);
-    leanDeg = Math.max(-30.0, Math.min(30.0, leanDeg));
+    let targetLean = 0.0;
+    if (this.isPhoneLive && this.phoneTelemetry && this.phoneTelemetry.lean !== undefined) {
+      targetLean = this.phoneTelemetry.lean;
+    } else if (cur.lean_deg !== undefined) {
+      targetLean = cur.lean_deg;
+    } else if (cur.lean_angle_deg !== undefined) {
+      targetLean = cur.lean_angle_deg;
+    } else {
+      const ay = cur.raw_imu_ay || 0.0;
+      targetLean = (ay / 9.81) * (180.0 / Math.PI);
+    }
+    targetLean = Math.max(-30.0, Math.min(30.0, targetLean));
+
+    // Smooth engine vibration / road bounce with exponential moving average
+    if (this.smoothedLean === undefined) this.smoothedLean = targetLean;
+    this.smoothedLean = this.smoothedLean * 0.85 + targetLean * 0.15;
+    const leanDeg = this.smoothedLean;
 
     const valBadge = document.getElementById('val-lean-angle');
     const fillLeft = document.getElementById('lean-fill-left');

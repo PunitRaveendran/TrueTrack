@@ -17,6 +17,10 @@ import java.util.concurrent.CopyOnWriteArraySet
  */
 class TelemetryStreamServer(port: Int = 8765) : WebSocketServer(InetSocketAddress(port)) {
 
+    init {
+        isReuseAddr = true
+    }
+
     private val connectedClients = CopyOnWriteArraySet<WebSocket>()
 
     override fun onOpen(conn: WebSocket?, handshake: ClientHandshake?) {
