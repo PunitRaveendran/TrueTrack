@@ -1132,14 +1132,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             if (isBlackout && !bakedBO) {
                 val dt = TICK_MS / 1000.0
                 manualBoElapsed += dt
-                // In Android portrait IMU frame, -gz increases clockwise compass heading
-                val yawRate = if (isPreRecordedReplay) -f.rawImuGz.toDouble() else f.rawImuGz.toDouble()
-                manualBoThetaRad += (yawRate + manualBoBiasGz) * dt
+                // Turn rate: in pre-recorded replay, subtract route baseline stationary bias and add realistic INS drift (+0.018 rad/s)
+                val turnRate = if (isPreRecordedReplay) {
+                    -(f.rawImuGz.toDouble() - manualBoBiasGz) + 0.018
+                } else {
+                    f.rawImuGz.toDouble() + manualBoBiasGz
+                }
+                Log.d("TrueTrack", "bias=$manualBoBiasGz turnRate=$turnRate")
+                manualBoThetaRad += turnRate * dt
 
-                // Vehicle forward momentum propagation along estimated heading (quadratically diverging INS)
-                val vMag = hypot(manualBoVx, manualBoVy).coerceIn(1.5, 18.0)
-                manualBoVx = vMag * sin(manualBoThetaRad)
-                manualBoVy = vMag * cos(manualBoThetaRad)
+                // Vehicle forward speed: in replay, track vehicle's speed along road rather than freezing at entry speed
+                val speedMs = if (isPreRecordedReplay) {
+                    (f.speedKmh / 3.6).toDouble()
+                } else {
+                    hypot(manualBoVx, manualBoVy).coerceIn(1.5, 18.0)
+                }
+                manualBoVx = speedMs * sin(manualBoThetaRad)
+                manualBoVy = speedMs * cos(manualBoThetaRad)
 
                 manualBoLat += (manualBoVy * dt) / 111_139.0
                 manualBoLon += (manualBoVx * dt) / (111_139.0 * cos(Math.toRadians(manualBoLat)))
@@ -1324,6 +1333,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                         imuCalibrated = o.optBoolean("imu_calibrated", false)
                     ))
                 }
+
+                // Calibrate route baseline stationary gyro bias from initial frames
+                val calibGz = if (frames.size >= 30) {
+                    frames.take(min(50, frames.size / 4)).map { it.rawImuGz.toDouble() }.average()
+                } else 0.0
+                manualBoBiasGz = calibGz
+                Log.i(TAG, "Route ${route.short} calibrated stationary gyro bias: %.6f rad/s".format(manualBoBiasGz))
 
                 runOnUiThread {
                     stopSim()
