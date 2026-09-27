@@ -54,13 +54,13 @@ class PartyManager(
     private var routeRef: DatabaseReference? = null
     private var routeListener: ValueEventListener? = null
 
-    fun startParty(name: String, onCreated: (String) -> Unit) {
+    fun startParty(name: String, initialLat: Double? = null, initialLon: Double? = null, onCreated: (String) -> Unit) {
         if (!ensureConfigured()) return
         val code = (1..6).map { "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[random.nextInt(32)] }.joinToString("")
-        joinParty(code, name, onCreated)
+        joinParty(code, name, initialLat, initialLon, onCreated)
     }
 
-    fun joinParty(code: String, name: String, onJoined: (String) -> Unit = {}) {
+    fun joinParty(code: String, name: String, initialLat: Double? = null, initialLon: Double? = null, onJoined: (String) -> Unit = {}) {
         if (!ensureConfigured()) return
         leaveParty(removeSelf = false)
         roomCode = code.trim().uppercase()
@@ -69,7 +69,7 @@ class PartyManager(
         val ref = partyRef.child("members")
         membersRef = ref
         routeRef = partyRef.child("route")
-        ref.child(deviceId).setValue(memberPayload(null, null)).addOnSuccessListener {
+        ref.child(deviceId).setValue(memberPayload(initialLat, initialLon)).addOnSuccessListener {
             attachListener(ref)
             attachRouteListener(routeRef!!)
             onStatus("Party $roomCode connected", true)

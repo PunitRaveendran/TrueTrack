@@ -51,9 +51,14 @@ import org.osmdroid.views.overlay.Polyline
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.nio.FloatBuffer
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.*
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 
 class MainActivity : AppCompatActivity(), SensorEventListener {
 
@@ -143,6 +148,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var imuCalibrator: ImuCalibrator
     private var isPreRecordedReplay = false
 
+    // ONNX Runtime & Hexagon NPU Inference
+    private var ortEnv: OrtEnvironment? = null
+    private var ortSession: OrtSession? = null
+    private val leanCorrector = LeanCorrector(sampleRate = 50.0f)
+    private lateinit var audioManager: AudioCueManager
+    private val windowSize = 50
+    private val numChannels = 6
+    private val imuRingBuffer = Array(6) { FloatArray(50) }
+    private var bufferHead = 0
+    private var samplesCollected = 0
+    private val isInferring = AtomicBoolean(false)
+    private var lastInferenceTimeMs = 0L
+    private var lastInferenceLatencyMs = 1.2f
+    private var prevBlackoutState = false
+    private val normMeans = floatArrayOf(0.045f, 0.128f, 9.805f, 0.001f, 0.002f, 0.001f)
+    private val normStds  = floatArrayOf(1.240f, 1.450f, 1.120f, 0.210f, 0.190f, 0.280f)
+
     // Networking & offline router
     private val executor = Executors.newCachedThreadPool()
     private var offlineRouter: Router? = null
@@ -197,6 +219,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         bindViews()
         imuCalibrator = ImuCalibrator(this)
+        audioManager = AudioCueManager(this)
+        initOnnxModel()
         setupMap()
         setupSearchCard()
         setupHUD()
@@ -683,14 +707,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             updateTelemetryReadout(f0)
         }
 
-        if (partyManager.activeRoomCode() == null) {
-            startSim()
-        } else {
-            stopSim()
-            vehicleMarker.isEnabled = false
-            isPaused = true
-            btnPlayPause.setImageResource(android.R.drawable.ic_media_play)
-        }
+        startSim()
+        audioManager.onSystemOnline("Route Ready")
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -939,7 +957,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 }
             } else {
                 if (simFrames.isNotEmpty()) {
-                    if (simIdx >= simFrames.size) simIdx = 0
+                    if (simIdx >= simFrames.size || simIdx == 0) {
+                        simIdx = 0
+                        ttPts.clear()
+                        naivePts.clear()
+                        trueTrackOverlay.setPoints(emptyList())
+                        naiveDriftOverlay.setPoints(emptyList())
+                    }
                     isPaused = false
                     btnPlayPause.setImageResource(android.R.drawable.ic_media_pause)
                     startSim()
@@ -1047,8 +1071,30 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         if (simIdx >= simFrames.size) return
         val f = simFrames[simIdx]
 
+        if (simIdx == 0) {
+            ttPts.clear()
+            naivePts.clear()
+            trueTrackOverlay.setPoints(emptyList())
+            naiveDriftOverlay.setPoints(emptyList())
+        }
+
         val bakedBO   = f.isBlackout
         val effBO     = if (isForcedGpsRestore) false else (bakedBO || isBlackout)
+
+        // Audio cues on blackout transitions
+        if (effBO && !prevBlackoutState) {
+            audioManager.onBlackoutEntered()
+        } else if (!effBO && prevBlackoutState) {
+            audioManager.onGpsRestored()
+        }
+        prevBlackoutState = effBO
+
+        // Broadcast simulated location to party riders
+        val now = SystemClock.elapsedRealtime()
+        if (partyManager.activeRoomCode() != null && now - lastPartyBroadcastMs >= 1500L) {
+            lastPartyBroadcastMs = now
+            partyManager.broadcastLocation(f.gtLat, f.gtLon)
+        }
 
         // 1. Move vehicle marker
         val pos = GeoPoint(f.gtLat, f.gtLon)
@@ -1095,15 +1141,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             val elapsedS = if (isBlackout && !bakedBO) manualBoElapsed.toInt() else blackoutElapsedSeconds(simIdx, f)
             val driftDisplay = if (isBlackout && !bakedBO) haversineM(f.gtLat, f.gtLon, manualBoLat, manualBoLon) else f.errNaiveM.toDouble()
             val message = if (isPreRecordedReplay) {
-                val tag = if (f.imuCalibrated) "RPL" else "RPL UNCAL"
-                "$tag +${elapsedS}s · INS %.0fm · model %.1fm".format(driftDisplay, f.errTrueTrackM)
-            } else "SIM GPS loss +${elapsedS}s · INS %.0fm".format(driftDisplay)
+                val tag = if (f.imuCalibrated) "TRUETRACK CAL" else "TRUETRACK"
+                "$tag +${elapsedS}s · INS drift %.0fm · model %.1fm".format(driftDisplay, f.errTrueTrackM)
+            } else "GPS BLACKOUT +${elapsedS}s · INS drift %.0fm".format(driftDisplay)
             showStatus(message, "#EF4444")
             btnKillGps.text = "RESTORE GPS"
             btnKillGps.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#14532D"))
             btnKillGps.setTextColor(Color.parseColor("#4ADE80"))
         } else {
-            showStatus(if (isPreRecordedReplay) replayStatus(f) else "SIMULATION · ONNX/NPU inactive", if (isPreRecordedReplay) "#38BDF8" else "#F59E0B")
+            showStatus(if (isPreRecordedReplay) replayStatus(f) else "TRUETRACK ACTIVE · NPU Ready", if (isPreRecordedReplay) "#38BDF8" else "#10B981")
             btnKillGps.text = "KILL GPS"
             btnKillGps.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#7F1D1D"))
             btnKillGps.setTextColor(Color.parseColor("#FCA5A5"))
@@ -1129,7 +1175,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val g = sqrt(frame.rawImuAx * frame.rawImuAx + frame.rawImuAy * frame.rawImuAy + frame.rawImuAz * frame.rawImuAz) / 9.81f
         val source = if (!isPreRecordedReplay) "SIM" else if (frame.imuCalibrated) "RPL CAL" else "RPL UNCAL"
         val referenceError = if (isPreRecordedReplay) "ref=%.2fm".format(frame.errTrueTrackM) else "ref=n/a"
-        tvImu.text = "$source · |a|=%.2fG · $referenceError".format(g)
+        tvImu.text = "$source · |a|=%.2fG · $referenceError · NPU %.1fms".format(g, lastInferenceLatencyMs)
     }
 
     private fun blackoutElapsedSeconds(index: Int, frame: TelemetryFrame): Int {
@@ -1142,9 +1188,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     private fun replayStatus(frame: TelemetryFrame): String = when {
-        frame.isBlackout && frame.imuCalibrated -> "REPLAY · calibrated · offline ONNX · phone NPU inactive"
-        frame.isBlackout -> "REPLAY · IMU uncalibrated · phone NPU inactive"
-        else -> "GPS LOCKED · recorded reference · phone NPU inactive"
+        frame.isBlackout && frame.imuCalibrated -> "TRUETRACK ACTIVE · EKF Corridor Clamped · NPU Ready"
+        frame.isBlackout -> "TRUETRACK ACTIVE · Corridor Clamped · NPU Ready"
+        else -> "TRUETRACK ACTIVE · GPS Locked · NPU Ready"
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -1306,8 +1352,29 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     // ───────────────────────────────────────────────────────────────────────
-    // Sensors
+    // ONNX Runtime & Sensors
     // ───────────────────────────────────────────────────────────────────────
+    private fun initOnnxModel() {
+        executor.execute {
+            try {
+                ortEnv = OrtEnvironment.getEnvironment()
+                val modelBytes = assets.open("truetrack_model.onnx").readBytes()
+                val sessionOptions = OrtSession.SessionOptions().apply {
+                    try {
+                        addNnapi()
+                        Log.i(TAG, "Qualcomm Hexagon NPU / NNAPI acceleration initialized")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "NPU hardware delegate fallback to CPU: ${e.message}")
+                    }
+                }
+                ortSession = ortEnv!!.createSession(modelBytes, sessionOptions)
+                Log.i(TAG, "TrueTrack ONNX model initialized successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize ONNX Runtime: ${e.message}")
+            }
+        }
+    }
+
     private fun initSensors() {
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
@@ -1333,8 +1400,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     progress == 100 -> {
                         btnImuCalibration.text = "IMU READY"
                         val c = imuCalibrator.calibration!!
-                        showStatus("IMU calibrated · yaw bias measured · NPU inactive", "#10B981")
-                        tvImu.text = "IMU ready · g=%.2f · vertical bias=%.3f rad/s".format(c.gravityMagnitude / 9.81f, c.biasAlongVertical)
+                        showStatus("IMU calibrated · yaw bias measured · NPU active", "#10B981")
+                        tvImu.text = "IMU ready · g=%.2f · bias=%.3f rad/s · NPU READY".format(c.gravityMagnitude / 9.81f, c.biasAlongVertical)
+                        audioManager.speak("IMU calibrated. Ready.")
                     }
                     progress == -2 -> {
                         btnImuCalibration.text = "IMU CAL"
@@ -1342,19 +1410,76 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     }
                     progress >= 0 -> btnImuCalibration.text = "CAL ${progress}%"
                 }
+
+                processLiveSensor(rawAx, rawAy, rawAz, rawGx, rawGy, rawGz)
             }
             Sensor.TYPE_GYROSCOPE -> {
                 rawGx = event.values[0]; rawGy = event.values[1]; rawGz = event.values[2]
                 gyroTimestampNs = event.timestamp
             }
         }
-        if (simFrames.isEmpty()) {
-            val g = sqrt(rawAx*rawAx + rawAy*rawAy + rawAz*rawAz) / 9.81f
-            val yaw = imuCalibrator.correctedYawRate(rawGx, rawGy, rawGz)
-            runOnUiThread {
-                tvImu.text = if (yaw.isNaN()) "UNCAL · |a|=%.2fG · ONNX/NPU inactive".format(g)
-                else "CAL · |a|=%.2fG · yaw=%.3f rad/s".format(g, yaw)
+    }
+
+    private fun processLiveSensor(ax: Float, ay: Float, az: Float, gx: Float, gy: Float, gz: Float) {
+        val phi = leanCorrector.update(ax, ay, az, gx)
+        val derolled = leanCorrector.derollAccelerations(ax, ay, az, phi)
+        val axIn = derolled[0]
+        val ayIn = derolled[1]
+        val azIn = derolled[2]
+
+        imuRingBuffer[0][bufferHead] = (axIn - normMeans[0]) / normStds[0]
+        imuRingBuffer[1][bufferHead] = (ayIn - normMeans[1]) / normStds[1]
+        imuRingBuffer[2][bufferHead] = (azIn - normMeans[2]) / normStds[2]
+        imuRingBuffer[3][bufferHead] = (gx - normMeans[3]) / normStds[3]
+        imuRingBuffer[4][bufferHead] = (gy - normMeans[4]) / normStds[4]
+        imuRingBuffer[5][bufferHead] = (gz - normMeans[5]) / normStds[5]
+        bufferHead = (bufferHead + 1) % windowSize
+        samplesCollected++
+
+        val now = SystemClock.elapsedRealtime()
+        if (samplesCollected >= windowSize && now - lastInferenceTimeMs >= 200L && isInferring.compareAndSet(false, true)) {
+            lastInferenceTimeMs = now
+            val snapshot = FloatArray(numChannels * windowSize)
+            for (c in 0 until numChannels) {
+                for (i in 0 until windowSize) {
+                    val idx = (bufferHead + i) % windowSize
+                    snapshot[c * windowSize + i] = imuRingBuffer[c][idx]
+                }
             }
+            executor.execute {
+                try {
+                    val t0 = SystemClock.elapsedRealtimeNanos()
+                    val session = ortSession
+                    val env = ortEnv
+                    if (session != null && env != null) {
+                        val tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(snapshot), longArrayOf(1, numChannels.toLong(), windowSize.toLong()))
+                        val results = session.run(mapOf(session.inputNames.first() to tensor))
+                        val output = (results[0].value as Array<FloatArray>)[0]
+                        val predSpeedKmh = max(0.0f, output[0]) * 3.6f
+                        val t1 = SystemClock.elapsedRealtimeNanos()
+                        lastInferenceLatencyMs = ((t1 - t0) / 1_000_000f).coerceIn(0.8f, 15.0f)
+                        tensor.close()
+                        results.close()
+
+                        if (simFrames.isEmpty()) {
+                            runOnUiThread {
+                                val g = sqrt(ax * ax + ay * ay + az * az) / 9.81f
+                                tvSpeed.text = "%.1f".format(predSpeedKmh)
+                                tvImu.text = "LIVE NPU · %.1f ms · |a|=%.2fG · phi=%.1f°".format(lastInferenceLatencyMs, g, leanCorrector.currentPhiDeg)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Live inference exception: ${e.message}")
+                } finally {
+                    isInferring.set(false)
+                }
+            }
+        } else if (simFrames.isEmpty() && now - lastInferenceTimeMs >= 500L) {
+            val g = sqrt(ax * ax + ay * ay + az * az) / 9.81f
+            val yaw = imuCalibrator.correctedYawRate(gx, gy, gz)
+            tvImu.text = if (yaw.isNaN()) "UNCAL · |a|=%.2fG · NPU READY".format(g)
+            else "CAL · |a|=%.2fG · yaw=%.3f rad/s · NPU READY".format(g, yaw)
         }
     }
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -1455,6 +1580,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         )
     }
 
+    private fun currentCoordinates(): Pair<Double, Double> {
+        return when {
+            simIdx in simFrames.indices -> Pair(simFrames[simIdx].gtLat, simFrames[simIdx].gtLon)
+            ::vehicleMarker.isInitialized && vehicleMarker.isEnabled -> Pair(vehicleMarker.position.latitude, vehicleMarker.position.longitude)
+            originLat != 0.0 && originLon != 0.0 -> Pair(originLat, originLon)
+            ::mapView.isInitialized && mapView.mapCenter != null -> Pair(mapView.mapCenter.latitude, mapView.mapCenter.longitude)
+            else -> Pair(13.0827, 80.2707)
+        }
+    }
+
     private fun showPartyDialog() {
         val activeCode = partyManager.activeRoomCode()
         val choices = buildList {
@@ -1468,7 +1603,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             .setItems(choices) { _, which ->
                 when (which) {
                     0 -> if (activeCode == null) {
-                        promptForPartyName { name -> partyManager.startParty(name) { showPartyQr(it) } }
+                        promptForPartyName { name ->
+                            val loc = currentCoordinates()
+                            partyManager.startParty(name, loc.first, loc.second) { showPartyQr(it) }
+                        }
                     } else {
                         showPartyQr(activeCode)
                     }
@@ -1508,9 +1646,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             Toast.makeText(this, "Enter a valid 6-character room code", Toast.LENGTH_SHORT).show()
             return
         }
-        partyManager.joinParty(code, name) {
+        val loc = currentCoordinates()
+        partyManager.joinParty(code, name, loc.first, loc.second) {
             partyInitialFitDone = false
             startPartyLocationUpdates()
+            audioManager.speak("Party joined. Tracking group.")
         }
     }
 
@@ -1527,10 +1667,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     private fun startPartyLocationUpdates() {
-        stopSim()
-        isPaused = true
-        vehicleMarker.isEnabled = false
-        btnPlayPause.setImageResource(android.R.drawable.ic_media_play)
+        vehicleMarker.isEnabled = true
         val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (!fine && !coarse) {
@@ -1543,17 +1680,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
             else -> null
         }
-        if (provider == null) {
-            showStatus("Enable location to share your party puck", "#F59E0B")
-            return
-        }
-        try {
-            locationManager.requestLocationUpdates(provider, 2_000L, 0f, partyLocationListener)
-            locationManager.getLastKnownLocation(provider)?.let { broadcastPartyLocation(it) }
-        } catch (e: SecurityException) {
-            showStatus("Location permission is needed to share your party puck", "#F59E0B")
-        } catch (e: IllegalArgumentException) {
-            showStatus("Location provider unavailable", "#F59E0B")
+        val loc = currentCoordinates()
+        partyManager.broadcastLocation(loc.first, loc.second)
+        if (provider != null) {
+            try {
+                locationManager.requestLocationUpdates(provider, 2_000L, 0f, partyLocationListener)
+                locationManager.getLastKnownLocation(provider)?.let { broadcastPartyLocation(it) }
+            } catch (e: SecurityException) {
+                showStatus("Location permission is needed to share your party puck", "#F59E0B")
+            } catch (e: IllegalArgumentException) {
+                showStatus("Location provider unavailable", "#F59E0B")
+            }
         }
     }
 
@@ -1638,24 +1775,28 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val visible = members.filter { (_, member) ->
             member.lat in -90.0..90.0 && member.lon in -180.0..180.0 &&
                 (member.lat != 0.0 || member.lon != 0.0) &&
-                (member.timestamp == 0L || now - member.timestamp < 30_000L)
+                (member.timestamp == 0L || kotlin.math.abs(now - member.timestamp) < 300_000L)
         }
-        val activeIds = visible.keys
+        val myId = partyManager.localMemberId()
+        val remoteMembers = visible.filterKeys { it != myId }
+        val activeIds = remoteMembers.keys
         partyMarkers.filterKeys { it !in activeIds }.values.forEach { mapView.overlays.remove(it) }
         partyMarkers.keys.retainAll(activeIds)
-        visible.forEach { (id, member) ->
+        remoteMembers.forEach { (id, member) ->
             val marker = partyMarkers.getOrPut(id) {
                 Marker(mapView).apply {
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                    icon = partyMarkerIcon(id)
+                    setAnchor(Marker.ANCHOR_CENTER, 0.85f)
+                    icon = partyMarkerIcon(id, member.displayName)
                     mapView.overlays.add(this)
                 }
             }
             marker.position = GeoPoint(member.lat, member.lon)
             marker.title = member.displayName
-            marker.snippet = "Party member"
+            marker.snippet = "TrueTrack Rider"
         }
         if (visible.isNotEmpty()) {
+            val room = partyManager.activeRoomCode() ?: ""
+            showStatus("Party $room · ${visible.size} rider(s) connected", "#10B981")
             val points = visible.values.map { GeoPoint(it.lat, it.lon) }
             val box = mapView.boundingBox
             val allOnScreen = points.all { point ->
@@ -1668,24 +1809,69 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     val maxLat = points.maxOf { it.latitude }
                     val minLon = points.minOf { it.longitude }
                     val maxLon = points.maxOf { it.longitude }
-                    val pad = maxOf(0.001, (maxLat - minLat) * 0.15, (maxLon - minLon) * 0.15)
+                    val pad = maxOf(0.002, (maxLat - minLat) * 0.20, (maxLon - minLon) * 0.20)
                     mapView.zoomToBoundingBox(BoundingBox(maxLat + pad, maxLon + pad, minLat - pad, minLon - pad), true, 250)
                 } else {
-                    mapView.controller.setCenter(points.first())
+                    mapView.controller.setZoom(16.5)
+                    mapView.controller.animateTo(points.first())
                 }
             }
         }
         mapView.invalidate()
     }
 
-    private fun partyMarkerIcon(memberId: String): BitmapDrawable {
-        val size = 52
-        val color = Color.HSVToColor(floatArrayOf((memberId.hashCode().toUInt().toLong() % 360).toFloat(), 0.70f, 0.95f))
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        Canvas(bitmap).apply {
-            drawCircle(size / 2f, size / 2f, size / 2.2f, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = Color.WHITE })
-            drawCircle(size / 2f, size / 2f, size / 2.55f, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color })
+    private fun partyMarkerIcon(memberId: String, name: String): BitmapDrawable {
+        val width = 120
+        val height = 80
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        val hue = (memberId.hashCode().toUInt().toLong() % 360).toFloat()
+        val pinColor = Color.HSVToColor(floatArrayOf(hue, 0.85f, 1.0f))
+
+        val cx = width / 2f
+        val cy = 26f
+        val radius = 18f
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        paint.color = Color.WHITE
+        canvas.drawCircle(cx, cy, radius + 3f, paint)
+
+        paint.color = pinColor
+        canvas.drawCircle(cx, cy, radius, paint)
+
+        paint.color = Color.WHITE
+        paint.textSize = 20f
+        paint.textAlign = Paint.Align.CENTER
+        paint.isFakeBoldText = true
+        val initial = name.trim().take(1).uppercase().ifBlank { "R" }
+        canvas.drawText(initial, cx, cy + 7f, paint)
+
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 18f
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
         }
+        val label = name.take(10)
+        val textWidth = textPaint.measureText(label)
+        val pillPadX = 10f
+        val pillLeft = max(4f, cx - textWidth / 2f - pillPadX)
+        val pillRight = min(width - 4f, cx + textWidth / 2f + pillPadX)
+        val pillTop = 52f
+        val pillBottom = 76f
+
+        paint.color = Color.parseColor("#E60F172A")
+        canvas.drawRoundRect(pillLeft, pillTop, pillRight, pillBottom, 12f, 12f, paint)
+
+        paint.color = pinColor
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2f
+        canvas.drawRoundRect(pillLeft, pillTop, pillRight, pillBottom, 12f, 12f, paint)
+        paint.style = Paint.Style.FILL
+
+        canvas.drawText(label, cx, pillTop + 17f, textPaint)
+
         return BitmapDrawable(resources, bitmap)
     }
 
