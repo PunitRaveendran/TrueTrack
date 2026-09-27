@@ -1103,14 +1103,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             partyManager.broadcastLocation(f.gtLat, f.gtLon)
         }
 
-        // 1. Move vehicle marker
-        val pos = GeoPoint(f.gtLat, f.gtLon)
+        // 1. Move vehicle marker (rides at the tip of the TrueTrack line)
+        val pos = GeoPoint(f.trueTrackLat, f.trueTrackLon)
         vehicleMarker.position = pos
         vehicleMarker.rotation = f.headingDeg
         vehicleMarker.isEnabled = true
 
         // 2. Blue TrueTrack trace (draws dynamically)
-        ttPts.add(GeoPoint(f.trueTrackLat, f.trueTrackLon))
+        ttPts.add(pos)
         if (ttPts.size > 2000) ttPts.removeAt(0)
         trueTrackOverlay.setPoints(ArrayList(ttPts))
 
@@ -1121,11 +1121,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 val dt = TICK_MS / 1000.0
                 manualBoElapsed += dt
                 manualBoThetaRad += (f.rawImuGz + manualBoBiasGz) * dt
-                val aFwd = f.rawImuAx + manualBoBiasAx
+                val aFwd = (f.rawImuAx + manualBoBiasAx.toFloat()).toDouble().coerceIn(-2.5, 2.5)
                 val aEast = aFwd * sin(manualBoThetaRad)
                 val aNorth = aFwd * cos(manualBoThetaRad)
                 manualBoVx += aEast * dt
                 manualBoVy += aNorth * dt
+                val speed = hypot(manualBoVx, manualBoVy)
+                if (speed > 16.0) {
+                    manualBoVx = (manualBoVx / speed) * 16.0
+                    manualBoVy = (manualBoVy / speed) * 16.0
+                }
                 manualBoLat += (manualBoVy * dt) / 111_139.0
                 manualBoLon += (manualBoVx * dt) / (111_139.0 * cos(Math.toRadians(manualBoLat)))
                 naivePt = GeoPoint(manualBoLat, manualBoLon)

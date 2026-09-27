@@ -40,8 +40,8 @@ class LeanCorrector(
      * @return Estimated roll angle phi in radians
      */
     fun update(ax: Float, ay: Float, az: Float, gx: Float): Float {
-        // 1. Gyro integration
-        val phiPred = currentPhiRad + gx * dt
+        // 1. Gyro integration (Right tilt = positive roll angle)
+        val phiPred = currentPhiRad - gx * dt
 
         // 2. 3D Acceleration magnitude (Total gravity + dynamic forces)
         val accelMag = sqrt(ax * ax + ay * ay + az * az)
@@ -50,7 +50,7 @@ class LeanCorrector(
         currentPhiRad = if (abs(accelMag - gNominal) < accelGate) {
             // Lateral tilt angle relative to total orthogonal gravity
             val gravOrthogonal = max(0.5f, sqrt(ay * ay + az * az))
-            val phiMeas = atan2(ax, gravOrthogonal)
+            val phiMeas = atan2(-ax, gravOrthogonal)
             alpha * phiPred + (1.0f - alpha) * phiMeas
         } else {
             phiPred
