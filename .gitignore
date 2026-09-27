@@ -57,3 +57,5 @@ android_app/**/build/
 
 # Generated training batches (re-generatable via physics_grounded_generator.py)
 ml_engine/synthetic_batch/
+
+device_screenshot.png
