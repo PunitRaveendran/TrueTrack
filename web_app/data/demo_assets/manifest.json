@@ -1,0 +1,33 @@
+{
+  "offline_demo_fallback_active": true,
+  "origin": "Raidurg Metro Station",
+  "routes": [
+    {
+      "id": "route_1",
+      "destination_id": "cyber_towers",
+      "destination_name": "Cyber Towers Junction",
+      "distance_m": 1020.2,
+      "num_nodes": 47,
+      "num_blackout_segments": 1,
+      "assets_dir": "demo_assets/route_1/"
+    },
+    {
+      "id": "route_2",
+      "destination_id": "trident_hotel",
+      "destination_name": "Trident Hotel Hyderabad",
+      "distance_m": 1001.2,
+      "num_nodes": 45,
+      "num_blackout_segments": 1,
+      "assets_dir": "demo_assets/route_2/"
+    },
+    {
+      "id": "route_3",
+      "destination_id": "deloitte_driveway",
+      "destination_name": "Deloitte Mindspace",
+      "distance_m": 1204.0,
+      "num_nodes": 47,
+      "num_blackout_segments": 0,
+      "assets_dir": "demo_assets/route_3/"
+    }
+  ]
+}

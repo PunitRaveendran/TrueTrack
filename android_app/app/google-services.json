@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "598223270078",
+    "project_id": "truetrack-1070c",
+    "storage_bucket": "truetrack-1070c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:598223270078:android:56fc0875e6ff00209feeef",
+        "android_client_info": {
+          "package_name": "com.truetrack.navigation"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCcdhljbxmigb6sFCXy-R-Pi4X4_PkeGZI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

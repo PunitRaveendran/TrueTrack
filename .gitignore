@@ -44,6 +44,7 @@ scratch/
 # Android Build & Gradle
 .gradle/
 android_app/.gradle/
+android_app/.gradle-user-home/
 android_app/app/build/
 **/build/
 local.properties
@@ -57,3 +58,7 @@ local.properties
 
 # Generated training batches (re-generatable via physics_grounded_generator.py)
 ml_engine/synthetic_batch/
+
+# Large OpenCelliD raw dumps (>100MB exceeds GitHub limits; corridor subsets are tracked)
+india_spec_towers/404.csv
+india_spec_towers/405.csv

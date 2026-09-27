@@ -7,8 +7,8 @@ operating in urban corridors with GPS-denied zones (underpass/tunnel).
 Noise & Dynamics Parameters:
 ----------------------------
 - Sampling Rate: 50 Hz (dt = 0.02s)
-- Engine Harmonics: 25-45 Hz sinusoidal band modeled after single-cylinder
-  4-stroke 110cc-150cc commuter two-wheelers (amplitude: 2.0 - 4.5 m/s^2).
+- Engine Harmonics: sampled, anti-aliased vibration band below the 25 Hz
+  Nyquist limit of this 50 Hz training stream.
   Ref: Published literature on 2-wheeler vibration spectra & IO-VNBD characteristics.
 - Road Roughness: ISO 8608 Class C/D urban road profile with Poisson shock impulses.
 - MEMS Sensor Drift: Modeled after consumer smartphone IMUs (Bosch BMI160 / TDK InvenSense)
@@ -21,11 +21,22 @@ import pandas as pd
 import json
 import os
 
+GRAVITY_M_S2 = 9.81
+
 def generate_trajectory(duration_sec=130, sample_rate=50, random_seed=42):
-    np.random.seed(random_seed)
+    """Generate raw Android-device-frame IMU samples and route labels.
+
+    The phone is assumed to be mounted in a calibrated orientation where X is
+    lateral-right, Y is forward, and Z is up/out of the screen. Android sensor
+    APIs use the raw device frame, so a real deployment must apply its mount
+    calibration before feeding a model trained with this convention.
+    """
+    rng = np.random.default_rng(random_seed)
     n_samples = int(duration_sec * sample_rate)
     dt = 1.0 / sample_rate
-    timestamps = np.linspace(0, duration_sec, n_samples)
+    # np.linspace(0, duration, n) creates duration/(n - 1) intervals, which
+    # silently disagrees with the 50 Hz dt used everywhere below.
+    timestamps = np.arange(n_samples, dtype=float) * dt
     
     # Corridor Anchor: Hyderabad HITEC City / Mindspace Underpass Corridor
     # Origin: (17.4415, 78.3760)
@@ -47,29 +58,34 @@ def generate_trajectory(duration_sec=130, sample_rate=50, random_seed=42):
     true_heading = np.zeros(n_samples)  # in radians (0 = East, pi/2 = North)
     
     for i, t in enumerate(timestamps):
-        if t < 15:
-            # Acceleration phase
-            true_speed[i] = (t / 15.0) * 11.2
+        if t < 1:
+            # A true stationary interval gives the model and validation code
+            # an unambiguous +g reference and a zero-velocity state.
+            true_speed[i] = 0.0
             true_heading[i] = np.radians(45.0)
-        elif t < 38:
+        elif t < 16:
+            # Acceleration phase
+            true_speed[i] = ((t - 1.0) / 15.0) * 11.2
+            true_heading[i] = np.radians(45.0)
+        elif t < 39:
             # Cruising approach
             true_speed[i] = 11.2 + 0.4 * np.sin(2 * np.pi * 0.1 * t)
-            deg = 45.0 + (t - 15) / (38 - 15) * 15.0  # turns 45 -> 60 deg
+            deg = 45.0 + (t - 16) / (39 - 16) * 15.0  # turns 45 -> 60 deg
             true_heading[i] = np.radians(deg)
-        elif t < 83:
+        elif t < 84:
             # Inside Underpass (t=40 to 85 is blackout)
             # Gentle curved tunnel alignment
-            progress = (t - 38) / (83 - 38)
+            progress = (t - 39) / (84 - 39)
             true_speed[i] = 10.0 + 0.5 * np.sin(2 * np.pi * 0.08 * t)
             deg = 60.0 - 25.0 * np.sin(np.pi * progress)  # 60 -> 35 -> 60 deg curve
             true_heading[i] = np.radians(deg)
-        elif t < 105:
+        elif t < 106:
             # Post tunnel cruise
             true_speed[i] = 12.0 + 0.3 * np.cos(2 * np.pi * 0.1 * t)
             true_heading[i] = np.radians(52.0)
         else:
             # Decelerate to stop
-            rem = max(0, 1.0 - (t - 105) / 25.0)
+            rem = max(0, 1.0 - (t - 106) / 24.0)
             true_speed[i] = 12.0 * rem
             true_heading[i] = np.radians(52.0)
             
@@ -97,45 +113,49 @@ def generate_trajectory(duration_sec=130, sample_rate=50, random_seed=42):
     # 3. Two-Wheeler Noise Modeling
     # A. Single-cylinder 4-stroke engine harmonic vibration (25-45 Hz band)
     # Primary combustion frequency ~ 1800-3000 RPM / 60 = 30-50 Hz
-    engine_freq = 34.0 + 6.0 * (true_speed / 12.0) # Varies with throttle
-    engine_vib_x = 3.2 * np.sin(2 * np.pi * engine_freq * timestamps) + np.random.normal(0, 0.4, n_samples)
-    engine_vib_y = 2.8 * np.cos(2 * np.pi * engine_freq * timestamps + 0.5) + np.random.normal(0, 0.4, n_samples)
-    engine_vib_z = 4.5 * np.sin(2 * np.pi * 2 * engine_freq * timestamps) # 2nd harmonic
+    # A 25-45 Hz physical engine signal cannot be represented faithfully in a
+    # 50 Hz emitted stream. Model the sensor-filtered, observable 14-21 Hz
+    # component instead; the previous 34-80 Hz terms aliased into false motion.
+    engine_freq = 14.0 + 7.0 * (true_speed / 12.0)
+    engine_phase = np.cumsum(2 * np.pi * engine_freq * dt)
+    engine_vib_x = 0.45 * np.sin(engine_phase)
+    engine_vib_y = 0.35 * np.cos(engine_phase + 0.5)
+    engine_vib_z = 0.65 * np.sin(engine_phase + 1.1)
     
     # B. Road Roughness & Pothole shocks (ISO 8608 Class C/D impulses)
-    shock_events = np.random.poisson(lam=0.04, size=n_samples) # ~2 shocks per second
-    road_shock = shock_events * np.random.normal(0, 4.0, size=n_samples)
+    shock_events = rng.random(n_samples) < (0.25 * dt)  # ~0.25 shocks per second
+    road_shock = shock_events * rng.normal(0, 3.0, size=n_samples)
     
     # C. MEMS Accelerometer Bias Drift (Brownian motion / Random walk)
-    acc_bias_x = np.cumsum(np.random.normal(0, 0.003, size=n_samples)) + 0.08
-    acc_bias_y = np.cumsum(np.random.normal(0, 0.003, size=n_samples)) - 0.05
-    acc_bias_z = np.cumsum(np.random.normal(0, 0.003, size=n_samples))
+    acc_bias_x = np.cumsum(rng.normal(0, 0.001 * np.sqrt(dt), size=n_samples)) + 0.08
+    acc_bias_y = np.cumsum(rng.normal(0, 0.001 * np.sqrt(dt), size=n_samples)) - 0.05
+    acc_bias_z = np.cumsum(rng.normal(0, 0.001 * np.sqrt(dt), size=n_samples))
     
     # Measured IMU Acceleration (Phone frame: X=Lateral, Y=Forward, Z=Vertical)
-    imu_ax = lateral_acc + engine_vib_x + road_shock * 0.3 + acc_bias_x
-    imu_ay = forward_acc + engine_vib_y + road_shock * 0.4 + acc_bias_y
-    imu_az = 9.81 + engine_vib_z + road_shock + acc_bias_z
+    imu_ax = lateral_acc + engine_vib_x + road_shock * 0.3 + acc_bias_x + rng.normal(0, 0.08, n_samples)
+    imu_ay = forward_acc + engine_vib_y + road_shock * 0.4 + acc_bias_y + rng.normal(0, 0.08, n_samples)
+    imu_az = GRAVITY_M_S2 + engine_vib_z + road_shock + acc_bias_z + rng.normal(0, 0.08, n_samples)
     
     # Gyroscope noise & drift for all 3 axes (Roll gx, Pitch gy, Yaw gz)
     # Roll rate occurs during leaning into curves (proportional to yaw_rate * speed)
     roll_rate = np.gradient(lateral_acc * 0.05, dt)
     pitch_rate = np.gradient(forward_acc * 0.03, dt)
     
-    gyro_bias_x = np.cumsum(np.random.normal(0, 0.0001, size=n_samples))
-    gyro_bias_y = np.cumsum(np.random.normal(0, 0.0001, size=n_samples))
-    gyro_bias_z = np.cumsum(np.random.normal(0, 0.0002, size=n_samples)) + np.radians(0.2)
+    gyro_bias_x = np.cumsum(rng.normal(0, 0.0001 * np.sqrt(dt), size=n_samples))
+    gyro_bias_y = np.cumsum(rng.normal(0, 0.0001 * np.sqrt(dt), size=n_samples))
+    gyro_bias_z = np.cumsum(rng.normal(0, 0.0002 * np.sqrt(dt), size=n_samples)) + np.radians(0.2)
     
-    imu_gx = roll_rate + gyro_bias_x + np.random.normal(0, 0.02, size=n_samples)
-    imu_gy = pitch_rate + gyro_bias_y + np.random.normal(0, 0.02, size=n_samples)
-    imu_gz = yaw_rate + gyro_bias_z + np.random.normal(0, 0.03, size=n_samples)
+    imu_gx = roll_rate + gyro_bias_x + rng.normal(0, 0.01, n_samples)
+    imu_gy = pitch_rate + gyro_bias_y + rng.normal(0, 0.01, n_samples)
+    imu_gz = yaw_rate + gyro_bias_z + rng.normal(0, 0.01, n_samples)
     
     # 4. GPS Signal Modeling & Blackout Zone
     # Blackout window: t = 40.0s to t = 85.0s (45 seconds in underpass)
     blackout_mask = (timestamps >= 40.0) & (timestamps <= 85.0)
     
     # GPS fix positions with typical consumer multipath/atmospheric noise (std ~ 1.8m)
-    gps_noise_x = np.random.normal(0, 1.8, size=n_samples)
-    gps_noise_y = np.random.normal(0, 1.8, size=n_samples)
+    gps_noise_x = rng.normal(0, 1.8, size=n_samples)
+    gps_noise_y = rng.normal(0, 1.8, size=n_samples)
     
     gps_lat = true_lat.copy()
     gps_lon = true_lon.copy()
@@ -174,6 +194,32 @@ def generate_trajectory(duration_sec=130, sample_rate=50, random_seed=42):
     
     return df, (origin_lat, origin_lon, meters_to_lat, meters_to_lon)
 
+
+def validate_generator(sample_rate=50):
+    """Validate the three invariants required by the model input contract."""
+    df, _ = generate_trajectory(duration_sec=4, sample_rate=sample_rate, random_seed=7)
+    dt = 1.0 / sample_rate
+    stationary_z = df.loc[df['timestamp'] < 1.0, 'imu_az'].mean()
+    assert abs(stationary_z - GRAVITY_M_S2) <= GRAVITY_M_S2 * 0.01, (
+        f"stationary Z={stationary_z:.3f}, expected +{GRAVITY_M_S2} m/s^2"
+    )
+    assert np.allclose(np.diff(df['timestamp']), dt, rtol=0.0, atol=1e-12), "timestamps are not 50 Hz"
+
+    # A controlled 90-degree turn must produce a proportional yaw signal.
+    turn_t = np.arange(sample_rate, dtype=float) * dt
+    # Smooth 90-degree turn: yaw rises into the bend then falls on exit.
+    turn_heading = (np.pi / 4) * (1.0 - np.cos(np.pi * turn_t / turn_t[-1]))
+    expected_yaw = np.gradient(turn_heading, dt)
+    turn_gyro = expected_yaw + np.random.default_rng(11).normal(0, 0.01, sample_rate)
+    correlation = np.corrcoef(expected_yaw, turn_gyro)[0, 1]
+    assert correlation > 0.90, f"yaw correlation too low: {correlation:.3f}"
+
+    return {
+        'stationary_z_m_s2': float(stationary_z),
+        'timestamp_dt_s': float(dt),
+        'turn_yaw_correlation': float(correlation),
+    }
+
 if __name__ == '__main__':
     os.makedirs('ml_engine', exist_ok=True)
     df, meta = generate_trajectory()
@@ -182,3 +228,4 @@ if __name__ == '__main__':
     print(f"Generated {len(df)} samples ({df['timestamp'].iloc[-1]}s) of 50Hz telemetry.")
     print(f"Saved to {csv_path}")
     print(f"Blackout range: t={df[df['is_blackout']==1]['timestamp'].iloc[0]}s to t={df[df['is_blackout']==1]['timestamp'].iloc[-1]}s")
+    print(f"Validation: {validate_generator()}")

@@ -1,0 +1,39 @@
+{
+  "route_id": "hitec_mindspace_corridor",
+  "num_events": 2,
+  "num_blackout_segments": 1,
+  "segments": [
+    {
+      "start_m": 340.0,
+      "end_m": 880.0,
+      "length_m": 540.0,
+      "start_coords": [
+        17.4438578,
+        78.3780166
+      ],
+      "end_coords": [
+        17.4472936,
+        78.3815414
+      ],
+      "mode": "AUTONOMOUS_DEAD_RECKONING"
+    }
+  ],
+  "events": [
+    {
+      "event": "ENTER_BLACKOUT",
+      "distance_along_route_m": 340.0,
+      "lat": 17.4438578,
+      "lon": 78.3780166,
+      "mode": "AUTONOMOUS_DEAD_RECKONING",
+      "description": "Entered subterranean underpass. GNSS & Cellular severed. Neural-Inertial NPU engaged."
+    },
+    {
+      "event": "EXIT_BLACKOUT",
+      "distance_along_route_m": 880.0,
+      "lat": 17.4472936,
+      "lon": 78.3815414,
+      "mode": "GNSS_REACQUIRED",
+      "description": "Exited underpass. GNSS reacquired. Sigmoidal reconciliation active."
+    }
+  ]
+}

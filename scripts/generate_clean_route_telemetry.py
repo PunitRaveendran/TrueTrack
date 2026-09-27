@@ -67,11 +67,47 @@ def load_sensor_csv(filepath):
     return {h: np.array(vals) for h, vals in cols.items()}
 
 
-def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, output_filename, dt=0.1, calibration_mode="fixed"):
+def find_stationary_calibration(accel, gyro, sample_rate=10):
+    """Return a verified two-second stationary window, or None.
+
+    Never estimate sensor bias from a moving/turning pre-blackout segment;
+    doing so subtracts real vehicle acceleration and yaw from the replay.
+    """
+    window = 2 * sample_rate
+    if len(accel) < window:
+        return None
+    best = None
+    best_score = float("inf")
+    for start in range(len(accel) - window + 1):
+        a = accel[start:start + window]
+        w = gyro[start:start + window]
+        a_mag = np.linalg.norm(a, axis=1)
+        w_mag = np.linalg.norm(w, axis=1)
+        score = (
+            abs(float(a_mag.mean()) - 9.80665) * 2.0
+            + float(a_mag.std()) * 2.0
+            + float(w_mag.mean()) * 20.0
+            + float(w.std(axis=0).mean()) * 10.0
+        )
+        stationary = (
+            abs(float(a_mag.mean()) - 9.80665) < 0.45
+            and float(a_mag.std()) < 0.45
+            and float(w_mag.mean()) < 0.045
+            and float(w.std(axis=0).mean()) < 0.025
+            and float(a.std(axis=0).max()) < 0.8
+        )
+        if stationary and score < best_score:
+            best = (start, start + window)
+            best_score = score
+    return best
+
+
+def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, output_filename, dt=0.1):
     """
     Processes a real Android sensor logger recording into 10Hz playback telemetry.
     dt = 0.1s (10Hz matching Android/Web UI loop)
-    calibration_mode: 'fixed' (standard 1.0s pre-blackout baseline) or 'adaptive' (steady-state search)
+    Sensor bias is estimated only from a verified stationary segment; if none
+    exists in the source recording, the route is marked uncalibrated.
     """
     folder_path = os.path.join(BASE_DIR, folder_name)
     df_tot = load_sensor_csv(os.path.join(folder_path, 'TotalAcceleration.csv'))
@@ -97,8 +133,11 @@ def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, outp
     v = np.cross(g_unit, target)
     s = np.linalg.norm(v)
     c = np.dot(g_unit, target)
-    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-    R_mount = np.eye(3) + vx + vx.dot(vx) * ((1.0 - c) / (s**2))
+    if s < 1e-8:
+        R_mount = np.eye(3) if c > 0 else np.diag([1.0, -1.0, -1.0])
+    else:
+        vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+        R_mount = np.eye(3) + vx + vx.dot(vx) * ((1.0 - c) / (s**2))
 
     tot_matrix = np.column_stack([df_tot['x'], df_tot['y'], df_tot['z']])
     gyro_matrix = np.column_stack([df_gyro['x'], df_gyro['y'], df_gyro['z']])
@@ -120,7 +159,37 @@ def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, outp
     spd_interp = np.interp(t_grid, df_loc['seconds_elapsed'], df_loc['speed'])
     bearing_interp = np.interp(t_grid, df_loc['seconds_elapsed'], df_loc['bearing'])
 
-    raw_imu = np.column_stack([ax_interp, ay_interp, az_interp, gx_interp, gy_interp, gz_interp])
+    # Calibrate only from a verified stationary segment before the blackout.
+    # Search the original recording so route slicing cannot discard startup.
+    calib_start_t = max(float(df_tot['seconds_elapsed'][0]), blk_start - 30.0)
+    calib_t = np.arange(calib_start_t, blk_start, dt)
+    calib_acc = np.column_stack([
+        np.interp(calib_t, df_tot['seconds_elapsed'], acc_aligned[:, axis]) for axis in range(3)
+    ])
+    calib_gyro = np.column_stack([
+        np.interp(calib_t, df_gyro['seconds_elapsed'], gyro_aligned[:, axis]) for axis in range(3)
+    ])
+    calibration_window = find_stationary_calibration(calib_acc, calib_gyro, sample_rate=round(1.0 / dt))
+    bias_ax = bias_ay = bias_az = bias_gx = bias_gy = bias_gz = 0.0
+    calibration_ok = calibration_window is not None
+    if calibration_ok:
+        cal_s, cal_e = calibration_window
+        a_mean = calib_acc[cal_s:cal_e].mean(axis=0)
+        w_mean = calib_gyro[cal_s:cal_e].mean(axis=0)
+        bias_ax, bias_ay, bias_az = float(a_mean[0]), float(a_mean[1]), float(a_mean[2] - 9.80665)
+        bias_gx, bias_gy, bias_gz = map(float, w_mean)
+        print(f"[{output_filename}] Stationary calibration [{calib_t[cal_s]:.1f}s-{calib_t[cal_e-1]:.1f}s], "
+              f"gyro bias={np.degrees(np.linalg.norm(w_mean)):.2f} deg/s")
+    else:
+        print(f"[{output_filename}] No stationary calibration window found; leaving IMU biases uncorrected")
+
+    ax_cal = ax_interp - bias_ax
+    ay_cal = ay_interp - bias_ay
+    az_cal = az_interp - bias_az
+    gx_cal = gx_interp - bias_gx
+    gy_cal = gy_interp - bias_gy
+    gz_cal = gz_interp - bias_gz
+    raw_imu = np.column_stack([ax_cal, ay_cal, az_cal, gx_cal, gy_cal, gz_cal])
 
     # Pre-compute NPU forward speed predictions using 50-sample sliding windows
     pred_v = np.zeros(N)
@@ -130,41 +199,7 @@ def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, outp
         out = session.run(None, {input_name: norm_win.T[np.newaxis, :, :].astype(np.float32)})[0][0]
         pred_v[i] = max(0.0, float(out[0]))
 
-    # ADR Online Calibration:
-    # 1. 'fixed': Standard production online calibration (1.0s window immediately prior to blackout onset).
-    # 2. 'adaptive': Exploratory heuristic searching backward up to 15s for steady-state motion.
     blk_idx_start = np.searchsorted(t_grid, blk_start)
-    win_len = 10  # 1.0s at 10Hz
-    
-    if calibration_mode == "adaptive":
-        search_start = max(0, blk_idx_start - 150)
-        best_score = float('inf')
-        best_s = max(0, blk_idx_start - win_len)
-        for s in range(blk_idx_start - win_len, search_start - 1, -1):
-            e = s + win_len
-            mean_gz = np.abs(np.mean(gz_interp[s:e]))
-            std_gz = np.std(gz_interp[s:e])
-            std_ax = np.std(ax_interp[s:e])
-            mean_ax = np.abs(np.mean(ax_interp[s:e]))
-            score = (mean_gz * 180.0 / np.pi) * 3.0 + (std_gz * 180.0 / np.pi) * 2.0 + std_ax * 1.5 + mean_ax
-            if mean_gz < np.radians(2.0) and std_gz < np.radians(2.0) and std_ax < 0.5:
-                best_s = s
-                break
-            if score < best_score:
-                best_score = score
-                best_s = s
-        best_e = best_s + win_len
-    else:
-        # Standard fixed 1.0s window immediately prior to blackout onset
-        best_s = max(0, blk_idx_start - win_len)
-        best_e = blk_idx_start
-
-    bias_ax = float(np.mean(ax_interp[best_s:best_e]))
-    bias_ay = float(np.mean(ay_interp[best_s:best_e]))
-    bias_gz = float(np.mean(gz_interp[best_s:best_e]))
-    offset_s = blk_start - t_grid[best_e]
-    print(f"[{output_filename}] Mode: {calibration_mode.upper()} | Window: [{t_grid[best_s]:.1f}s - {t_grid[best_e]:.1f}s] "
-          f"(Offset: {offset_s:.1f}s prior), bias_gz={np.degrees(bias_gz):+.2f} deg/s, bias_ax={bias_ax:+.2f} m/s^2")
 
     frames = []
 
@@ -223,9 +258,9 @@ def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, outp
             # ZERO ground-truth coordinates are referenced here.
 
             # 1. Naive Classical INS (Double-Integration)
-            naive_theta += (gz_interp[i] - bias_gz) * dt
-            a_fwd = ax_interp[i] - bias_ax
-            a_lat = ay_interp[i] - bias_ay
+            naive_theta += gz_cal[i] * dt
+            a_fwd = ax_cal[i]
+            a_lat = ay_cal[i]
             a_east = a_fwd * np.cos(naive_theta) - a_lat * np.sin(naive_theta)
             a_north = a_fwd * np.sin(naive_theta) + a_lat * np.cos(naive_theta)
             naive_vx += a_east * dt
@@ -235,7 +270,7 @@ def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, outp
             current_naive_lat, current_naive_lon = enu_to_geodetic(naive_x, naive_y, lat0, lon0)
 
             # 2. TrueTrack Neural Velocity Dead-Reckoning
-            tt_theta += (gz_interp[i] - bias_gz) * dt
+            tt_theta += gz_cal[i] * dt
             vx_tt = pred_v[i] * np.cos(tt_theta)
             vy_tt = pred_v[i] * np.sin(tt_theta)
             tt_x += vx_tt * dt
@@ -250,7 +285,7 @@ def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, outp
             err_naive = float(np.hypot(naive_x - gt_enu_x[i], naive_y - gt_enu_y[i]))
             err_tt = float(np.hypot(tt_x - gt_enu_x[i], tt_y - gt_enu_y[i]))
 
-        pred_yaw_deg = float(np.degrees(gz_interp[i] - bias_gz))
+        pred_yaw_deg = float(np.degrees(gz_cal[i]))
 
         frames.append({
             "t": t_curr,
@@ -264,9 +299,11 @@ def process_real_log_route(folder_name, t_start, t_end, blk_start, blk_end, outp
             "truetrack": [round(current_tt_lat, 7), round(current_tt_lon, 7)],
             "err_naive_m": round(err_naive, 2),
             "err_truetrack_m": round(err_tt, 2),
-            "raw_imu_ax": round(float(ax_interp[i]), 3),
-            "raw_imu_ay": round(float(ay_interp[i]), 3),
-            "raw_imu_gz": round(float(gz_interp[i]), 4)
+            "raw_imu_ax": round(float(ax_cal[i]), 3),
+            "raw_imu_ay": round(float(ay_cal[i]), 3),
+            "raw_imu_gz": round(float(gz_cal[i]), 4),
+            "raw_imu_az": round(float(az_cal[i]), 3),
+            "imu_calibrated": calibration_ok
         })
 
     out_path = os.path.join(ASSETS_DIR, output_filename)
@@ -428,7 +465,8 @@ def process_corridor_simulation(output_filename="corridor_telemetry.json"):
             "err_truetrack_m": round(err_tt, 2),
             "raw_imu_ax": round(float(ax_vals[i]), 3),
             "raw_imu_ay": round(float(ay_vals[i]), 3),
-            "raw_imu_gz": round(float(gz_vals[i]), 4)
+            "raw_imu_gz": round(float(gz_vals[i]), 4),
+            "raw_imu_az": 9.81
         })
 
     out_path = os.path.join(ASSETS_DIR, output_filename)
@@ -447,17 +485,17 @@ def main():
     print("=== ZERO GROUND-TRUTH TETHERING / ZERO PER-FRAME OFFSET LEAKS ===")
     print("==================================================================")
 
-    # 1. Rohini Theatre Koyambedu (55s drive, blackout during flyover curve 15s to 45s = 30s)
+    # 1. Rohini Theatre Koyambedu (Full 53s drive, blackout during flyover curve 15s to 45s = 30s)
     process_real_log_route(
         folder_name="Rohini_Theatre_Koyambedu-2026-09-25_13-05-40",
-        t_start=5.0,
-        t_end=52.0,
+        t_start=1.0,
+        t_end=54.0,
         blk_start=15.0,
         blk_end=45.0,
         output_filename="rohini_telemetry.json"
     )
 
-    # 2. Varadarajapuram (urban commuter drive, 100s slice, blackout 30s to 75s = 45s)
+    # 2. Varadarajapuram (clean 100s continuous drive, blackout 90s to 135s = 45s)
     process_real_log_route(
         folder_name="Varadarajapuram-2026-09-25_11-12-54",
         t_start=70.0,
@@ -467,7 +505,7 @@ def main():
         output_filename="varadarajapuram_telemetry.json"
     )
 
-    # 3. 45/46 Road Corridor (Chennai, 100s slice, blackout 30s to 75s = 45s)
+    # 3. 45/46 Road Corridor (clean 100s continuous drive, blackout 40s to 85s = 45s)
     process_real_log_route(
         folder_name="45_46-2026-09-25_10-54-49",
         t_start=20.0,

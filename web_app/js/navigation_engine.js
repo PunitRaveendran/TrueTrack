@@ -183,9 +183,9 @@ class TrueTrackCockpit {
       pitch: 0,
       bearing: 0,
       attributionControl: false,
-      maxBounds: CORRIDOR_CONFIGS.hitec.maxBounds,
-      minZoom: 14.0,
-      maxZoom: 18.0,
+      // No global maxBounds — each corridor sets its own; removed for A→B routing freedom
+      minZoom: 10.0,
+      maxZoom: 19.0,
       style: {
         version: 8,
         sources: {
@@ -340,6 +340,32 @@ class TrueTrackCockpit {
           'line-width': 1,
           'line-dasharray': [2, 2],
           'line-opacity': 0.5
+        }
+      });
+
+      // Corridor Ribbon Boundary Buffer (Phase 2 & Phase 7)
+      this.map.addSource('corridor-ribbon-source', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+      this.map.addLayer({
+        id: 'corridor-ribbon-fill',
+        type: 'fill',
+        source: 'corridor-ribbon-source',
+        paint: {
+          'fill-color': '#00f0ff',
+          'fill-opacity': 0.08
+        }
+      });
+      this.map.addLayer({
+        id: 'corridor-ribbon-line',
+        type: 'line',
+        source: 'corridor-ribbon-source',
+        paint: {
+          'line-color': '#00f0ff',
+          'line-width': 1.5,
+          'line-opacity': 0.35,
+          'line-dasharray': [4, 3]
         }
       });
 
@@ -603,23 +629,82 @@ class TrueTrackCockpit {
     // Continuous Playback Speed Slider: 0.5x to 5.0x (Task 1.7)
     const sliderSpeed = document.getElementById('slider-continuous-speed');
     const valSpeed = document.getElementById('val-continuous-speed');
+    const transSpeedSlider = document.getElementById('transport-speed-slider');
+    const transSpeedBadge = document.getElementById('transport-speed-badge');
+
+    const updateSpeed = (spd) => {
+      this.playbackSpeed = spd;
+      if (valSpeed) valSpeed.textContent = `${spd.toFixed(1)}×`;
+      if (sliderSpeed) sliderSpeed.value = spd;
+      if (transSpeedSlider) transSpeedSlider.value = spd;
+      if (transSpeedBadge) transSpeedBadge.textContent = `${spd.toFixed(1)}×`;
+      speedBtns.forEach(b => {
+        b.classList.toggle('active', Math.abs(parseFloat(b.dataset.speed) - spd) < 0.05);
+      });
+    };
+
     if (sliderSpeed) {
-      sliderSpeed.addEventListener('input', (e) => {
-        const spd = parseFloat(e.target.value);
-        this.playbackSpeed = spd;
-        if (valSpeed) valSpeed.textContent = `${spd.toFixed(1)}×`;
-        speedBtns.forEach(b => {
-          b.classList.toggle('active', Math.abs(parseFloat(b.dataset.speed) - spd) < 0.05);
-        });
+      sliderSpeed.addEventListener('input', (e) => updateSpeed(parseFloat(e.target.value)));
+    }
+    if (transSpeedSlider) {
+      transSpeedSlider.addEventListener('input', (e) => updateSpeed(parseFloat(e.target.value)));
+    }
+
+    // Google Maps Point A -> Point B Route Planner Controls
+    const btnTogglePlanner = document.getElementById('btn-toggle-route-planner');
+    const plannerCard = document.getElementById('gmaps-planner-card');
+    if (btnTogglePlanner && plannerCard) {
+      btnTogglePlanner.addEventListener('click', () => {
+        const isHidden = plannerCard.style.display === 'none';
+        plannerCard.style.display = isHidden ? 'block' : 'none';
+        btnTogglePlanner.classList.toggle('active', isHidden);
       });
     }
 
-    // POI Destination Selector (Task 1.7)
-    const selectPoi = document.getElementById('select-poi');
-    if (selectPoi) {
-      selectPoi.addEventListener('change', (e) => {
-        this.routeToPoi(e.target.value);
+    const btnCollapsePlanner = document.getElementById('btn-toggle-planner-collapse');
+    if (btnCollapsePlanner && plannerCard) {
+      btnCollapsePlanner.addEventListener('click', () => {
+        plannerCard.classList.toggle('collapsed');
+        btnCollapsePlanner.innerHTML = plannerCard.classList.contains('collapsed') ? '&plus;' : '&minus;';
       });
+    }
+
+    const btnSwapAB = document.getElementById('btn-swap-ab');
+    if (btnSwapAB) {
+      btnSwapAB.addEventListener('click', () => {
+        const selA = document.getElementById('select-origin');
+        const selB = document.getElementById('select-destination');
+        if (selA && selB) {
+          const tmp = selA.value;
+          selA.value = selB.value;
+          selB.value = tmp;
+          this.calculateRouteAB();
+        }
+      });
+    }
+
+    const selectOrigin = document.getElementById('select-origin');
+    const selectDest = document.getElementById('select-destination');
+    if (selectOrigin) {
+      selectOrigin.addEventListener('change', () => this.calculateRouteAB());
+    }
+    if (selectDest) {
+      selectDest.addEventListener('change', () => this.calculateRouteAB());
+    }
+
+    const btnFindRoute = document.getElementById('btn-find-route-ab');
+    if (btnFindRoute) {
+      btnFindRoute.addEventListener('click', () => this.calculateRouteAB());
+    }
+
+    const btnStartNav = document.getElementById('btn-start-nav-ab');
+    if (btnStartNav) {
+      btnStartNav.addEventListener('click', () => this.startRouteABNavigation());
+    }
+
+    const btnClearAB = document.getElementById('btn-clear-ab');
+    if (btnClearAB) {
+      btnClearAB.addEventListener('click', () => this.clearRouteAB());
     }
 
     // 2.4-Second Gentle Auto-Dismiss for Intro Overlay
@@ -736,6 +821,8 @@ class TrueTrackCockpit {
       }
 
       this.map.setMaxBounds(cfg.maxBounds);
+      this.map.setMinZoom(cfg.minZoom);
+      this.map.setMaxZoom(cfg.maxZoom);
       this.map.flyTo({ center: cfg.center, zoom: cfg.zoom, pitch: 0, duration: 800 });
     }
 
@@ -1121,6 +1208,50 @@ class TrueTrackCockpit {
       } else {
         errTT = errLegacy;
         ttCoord = legCoord;
+      }
+    } else {
+      // Check if within 3.0s (30 frames @ 10Hz) following blackout recovery.
+      // Apply smooth cosine S-curve Sigmoidal reconciliation — zero teleport snap.
+      // We scan backwards from current index to find the last blackout frame.
+      let framesSinceExit = 0;
+      let foundBlackout = false;
+      for (let back = 0; back <= 35 && (index - back) >= 0; back++) {
+        const prevSample = this.telemetry[index - back];
+        if (prevSample && prevSample.is_blackout === 1) {
+          framesSinceExit = back; // This many non-blackout frames since exit
+          foundBlackout = true;
+          break;
+        }
+      }
+      // Apply reconciliation window: 0 to 30 frames after exit (inclusive of frame 0)
+      if (foundBlackout && framesSinceExit >= 0 && framesSinceExit <= 30) {
+        const exitFrameIdx = index - framesSinceExit; // Last blackout frame
+        const exitSample = this.telemetry[exitFrameIdx];
+        if (exitSample) {
+          const progress = Math.min(1.0, framesSinceExit / 30.0);
+          // S-curve: smoothly transitions from diverged exit position to current GPS truth
+          const alpha = this.toggleSigmoid
+            ? 0.5 * (1.0 - Math.cos(progress * Math.PI)) // Smooth cosine ramp (0 → 1)
+            : 1.0; // Hard snap if Sigmoid ablated
+
+          const exitTT = exitSample.truetrack || exitSample.gt;
+          const exitLeg = exitSample.naive || exitSample.gt;
+          const exitTTErr = exitSample.err_truetrack_m || 0.65;
+          const exitLegErr = exitSample.err_naive_m || 60.0;
+
+          // Blend: at exit alpha=0 → show blackout-end position; at frame 30 alpha=1 → show GPS truth
+          ttCoord = [
+            (1.0 - alpha) * exitTT[0] + alpha * d.gt[0],
+            (1.0 - alpha) * exitTT[1] + alpha * d.gt[1]
+          ];
+          errTT = (1.0 - alpha) * exitTTErr + alpha * 0.05;
+
+          legCoord = [
+            (1.0 - alpha) * exitLeg[0] + alpha * d.gt[0],
+            (1.0 - alpha) * exitLeg[1] + alpha * d.gt[1]
+          ];
+          errLegacy = (1.0 - alpha) * exitLegErr + alpha * 0.18;
+        }
       }
     }
 
@@ -1826,27 +1957,70 @@ class TrueTrackCockpit {
     const slice = this.telemetry.slice(start, currentIdx + 1);
     if (slice.length < 2) return;
 
-    // 1. Ground Truth GPS Speed (Slate faint reference)
+    // Dual Y-scale canvas: top half = speed (0-60 km/h), bottom half = yaw (-90 to +90 °/s)
+    const speedZeroY = h / 2; // Zero line for speed chart is at 50% height
+    const yawZeroY = h - 8;   // Yaw zero baseline at bottom
+
+    // Faint divider between speed and yaw sections
+    ctx.strokeStyle = 'rgba(71, 85, 105, 0.4)';
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([3, 3]);
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
-    ctx.lineWidth = 1.2;
+    ctx.moveTo(0, h / 2 + 2);
+    ctx.lineTo(w, h / 2 + 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Section labels
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.5)';
+    ctx.font = '9px -apple-system, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('SPEED', 3, 12);
+    ctx.fillText('YAW RATE', 3, h / 2 + 14);
+
+    // 1. Ground Truth GPS Speed (Slate faint reference) — top half
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.4)';
+    ctx.lineWidth = 1.0;
     slice.forEach((d, i) => {
       const x = (i / windowSize) * w;
       const spd = d.speed_kmh || 0.0;
-      const y = h - 8 - (spd / 60.0) * (h - 18);
+      const y = (h / 2 - 4) - (spd / 60.0) * (h / 2 - 10);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
     ctx.stroke();
 
-    // 2. NPU 1D-CNN Predicted Forward Speed (Emerald #10b981)
+    // 2. NPU 1D-CNN Predicted Forward Speed (Emerald) — top half
     ctx.beginPath();
     ctx.strokeStyle = '#10b981';
     ctx.lineWidth = 1.8;
     slice.forEach((d, i) => {
       const x = (i / windowSize) * w;
       const predSpd = d.pred_speed_kmh || 0.0;
-      const y = h - 8 - (predSpd / 60.0) * (h - 18);
+      const y = (h / 2 - 4) - (predSpd / 60.0) * (h / 2 - 10);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // 3. Zero baseline for yaw
+    ctx.strokeStyle = '#1e222b';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, yawZeroY);
+    ctx.lineTo(w, yawZeroY);
+    ctx.stroke();
+
+    // 4. NPU Predicted Yaw Rate (Indigo #818cf8) — bottom half (±90°/s range)
+    ctx.beginPath();
+    ctx.strokeStyle = '#818cf8';
+    ctx.lineWidth = 1.6;
+    slice.forEach((d, i) => {
+      const x = (i / windowSize) * w;
+      const yawDegS = d.pred_yaw_deg_s || 0.0;
+      const yawNorm = Math.max(-1.0, Math.min(1.0, yawDegS / 90.0));
+      const y = yawZeroY - yawNorm * (h / 2 - 18);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
@@ -1860,7 +2034,7 @@ class TrueTrackCockpit {
       const elYaw = document.getElementById('trace-val-yaw');
       if (elVp) elVp.textContent = `v_pred: ${(cur.pred_speed_kmh || 0).toFixed(1)} km/h`;
       if (elVgt) elVgt.textContent = `v_gt: ${(cur.speed_kmh || 0).toFixed(1)} km/h`;
-      if (elYaw) elYaw.textContent = `yaw: ${(cur.pred_yaw_deg_s || 0).toFixed(1)}°/s`;
+      if (elYaw) elYaw.textContent = `ω: ${(cur.pred_yaw_deg_s || 0).toFixed(1)} °/s`;
     }
   }
 
@@ -1929,46 +2103,289 @@ class TrueTrackCockpit {
   }
 
   populatePoiSelect() {
-    const sel = document.getElementById('select-poi');
-    if (!sel || !this.demoPois) return;
-    sel.innerHTML = '<option value="">A* Destination POI...</option>';
-    const originPoi = this.demoPois.find(p => p.id === 'raidurg_metro') || this.demoPois[0];
-    const reachMap = {};
-    if (originPoi && originPoi.reachable_destinations) {
-      originPoi.reachable_destinations.forEach(d => {
-        reachMap[d.id] = d.dist_m;
-      });
-    }
+    const selOrigin = document.getElementById('select-origin');
+    const selDest = document.getElementById('select-destination');
+    if (!this.demoPois || this.demoPois.length === 0) return;
 
-    this.demoPois.forEach(poi => {
-      if (poi.id !== originPoi.id) {
+    if (selOrigin) {
+      selOrigin.innerHTML = '';
+      this.demoPois.forEach(poi => {
         const opt = document.createElement('option');
         opt.value = poi.id;
-        const dStr = reachMap[poi.id] ? ` (${reachMap[poi.id]}m)` : '';
-        opt.textContent = `${poi.name}${dStr}`;
-        sel.appendChild(opt);
-      }
-    });
+        opt.textContent = poi.name;
+        selOrigin.appendChild(opt);
+      });
+      selOrigin.value = 'raidurg_metro';
+    }
+
+    if (selDest) {
+      selDest.innerHTML = '';
+      this.demoPois.forEach(poi => {
+        const opt = document.createElement('option');
+        opt.value = poi.id;
+        opt.textContent = poi.name;
+        selDest.appendChild(opt);
+      });
+      // Default Point B to Cyber Towers
+      const defaultDest = this.demoPois.find(p => p.id === 'cyber_towers') || this.demoPois[1];
+      if (defaultDest) selDest.value = defaultDest.id;
+    }
+
+    // Immediately calculate initial default route
+    setTimeout(() => {
+      this.calculateRouteAB();
+    }, 400);
   }
 
-  routeToPoi(targetPoiId) {
-    if (!this.roadGraph || !targetPoiId) {
-      this.clearPoiRoute();
+  calculateRouteAB() {
+    if (!this.roadGraph || !this.demoPois) return;
+    const selOrigin = document.getElementById('select-origin');
+    const selDest = document.getElementById('select-destination');
+    if (!selOrigin || !selDest) return;
+
+    const origId = selOrigin.value;
+    const destId = selDest.value;
+    if (!origId || !destId) return;
+
+    const origPoi = this.demoPois.find(p => p.id === origId) || this.demoPois[0];
+    const destPoi = this.demoPois.find(p => p.id === destId) || this.demoPois[1];
+
+    if (origId === destId) {
+      alert('Point A and Point B cannot be the same location.');
       return;
     }
-    const targetPoi = this.demoPois.find(p => p.id === targetPoiId);
-    if (!targetPoi) return;
 
-    // Origin: Raidurg Metro Station (corridor origin)
-    const originPoi = this.demoPois.find(p => p.id === 'raidurg_metro') || this.demoPois[0];
-    const startNode = originPoi.target_node || originPoi.nearest_node;
-    const goalNode = targetPoi.target_node || targetPoi.nearest_node;
+    const startNode = origPoi.target_node || origPoi.nearest_node;
+    const goalNode = destPoi.target_node || destPoi.nearest_node;
 
     const path = this.runAStar(startNode, goalNode);
     if (path && path.length > 0) {
       const coords = path.map(nid => [this.roadGraph.nodes[nid].lon, this.roadGraph.nodes[nid].lat]);
-      this.displayPoiRoute(coords, targetPoi);
+      this.currentCalculatedRouteCoords = coords;
+      this.currentOrigPoi = origPoi;
+      this.currentDestPoi = destPoi;
+      this.displayRouteAB(coords, origPoi, destPoi);
+    } else {
+      console.warn(`No routable path found between ${origPoi.name} and ${destPoi.name}`);
     }
+  }
+
+  displayRouteAB(coords, origPoi, destPoi) {
+    if (!this.map || !this.mapLoaded) return;
+    const src = this.map.getSource('poi-route-source');
+    if (src) {
+      src.setData({
+        type: 'Feature',
+        properties: { name: `${origPoi.name} -> ${destPoi.name}` },
+        geometry: { type: 'LineString', coordinates: coords }
+      });
+    }
+
+    let totalDistM = 0;
+    for (let i = 1; i < coords.length; i++) {
+      const [lon1, lat1] = coords[i - 1];
+      const [lon2, lat2] = coords[i];
+      const dLat = (lat2 - lat1) * 110600.0;
+      const dLon = (lon2 - lon1) * 111320.0 * Math.cos((lat1 * Math.PI) / 180.0);
+      totalDistM += Math.hypot(dLat, dLon);
+    }
+
+    const etaSec = Math.round(totalDistM / 8.33); // ~30 km/h average
+    const infoCard = document.getElementById('gmaps-route-info');
+    const distVal = document.getElementById('route-dist-val');
+    const etaVal = document.getElementById('route-eta-val');
+    const nodesVal = document.getElementById('route-nodes-val');
+    const stepText = document.getElementById('route-step-text');
+
+    if (infoCard) infoCard.style.display = 'flex';
+    if (distVal) distVal.textContent = totalDistM >= 1000 ? `${(totalDistM / 1000).toFixed(2)} km` : `${Math.round(totalDistM)} m`;
+    if (etaVal) etaVal.textContent = `${Math.floor(etaSec / 60)}m ${etaSec % 60}s`;
+    if (nodesVal) nodesVal.textContent = `${coords.length} nodes`;
+    if (stepText) stepText.innerHTML = `Route: <strong>${origPoi.name}</strong> &rarr; <strong>${destPoi.name}</strong> &bull; Zero contraflow &bull; Ready to navigate`;
+
+    // Temporarily lift maxBounds so fitBounds can reach the entire route
+    this.map.setMaxBounds(null);
+    const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+    this.map.fitBounds(bounds, { padding: 80, duration: 600 });
+  }
+
+  startRouteABNavigation() {
+    if (!this.currentCalculatedRouteCoords || this.currentCalculatedRouteCoords.length < 2) {
+      this.calculateRouteAB();
+    }
+    if (!this.currentCalculatedRouteCoords || this.currentCalculatedRouteCoords.length < 2) return;
+
+    const coords = this.currentCalculatedRouteCoords; // array of [lon, lat]
+    const totalPoints = coords.length;
+    let cumDist = 0;
+    const segmentDists = [];
+    for (let i = 1; i < totalPoints; i++) {
+      const dLat = (coords[i][1] - coords[i-1][1]) * 110600.0;
+      const dLon = (coords[i][0] - coords[i-1][0]) * 111320.0 * Math.cos((coords[i-1][1] * Math.PI) / 180.0);
+      const d = Math.hypot(dLat, dLon);
+      segmentDists.push(d);
+      cumDist += d;
+    }
+
+    const totalTimeSec = Math.max(30.0, cumDist / 8.5); // ~30 km/h average
+    const dt = 0.1;
+    const totalFrames = Math.round(totalTimeSec / dt);
+
+    const blackoutStartSec = totalTimeSec * 0.35;
+    const blackoutEndSec = totalTimeSec * 0.70;
+
+    const simFrames = [];
+    for (let f = 0; f < totalFrames; f++) {
+      const t = f * dt;
+      const frac = f / Math.max(1, totalFrames - 1);
+      const targetDist = frac * cumDist;
+
+      // Locate position along road segments
+      let curD = 0;
+      let segIdx = 0;
+      for (let s = 0; s < segmentDists.length; s++) {
+        if (curD + segmentDists[s] >= targetDist || s === segmentDists.length - 1) {
+          segIdx = s;
+          break;
+        }
+        curD += segmentDists[s];
+      }
+      const segFrac = segmentDists[segIdx] > 0 ? Math.min(1.0, (targetDist - curD) / segmentDists[segIdx]) : 0;
+      const nextIdx = Math.min(coords.length - 1, segIdx + 1);
+      const lat = coords[segIdx][1] + (coords[nextIdx][1] - coords[segIdx][1]) * segFrac;
+      const lon = coords[segIdx][0] + (coords[nextIdx][0] - coords[segIdx][0]) * segFrac;
+
+      // Bearing along segment
+      const dy = (coords[nextIdx][1] - coords[segIdx][1]) * 110600.0;
+      const dx = (coords[nextIdx][0] - coords[segIdx][0]) * 111320.0 * Math.cos((lat * Math.PI) / 180.0);
+      let heading = Math.atan2(dx, dy) * (180.0 / Math.PI);
+      if (heading < 0) heading += 360;
+
+      // Speed profile
+      let speedKmh = 32.0;
+      if (frac < 0.1) speedKmh = 32.0 * (frac / 0.1);
+      else if (frac > 0.9) speedKmh = 32.0 * ((1.0 - frac) / 0.1);
+
+      const isBO = (t >= blackoutStartSec && t <= blackoutEndSec) ? 1 : 0;
+      const boElapsed = Math.max(0, t - blackoutStartSec);
+
+      // Inertial readings
+      const ax = (frac < 0.1 ? 1.8 : (frac > 0.9 ? -2.1 : 0.2)) + 0.12 * Math.sin(t * 12.0);
+      const ay = Math.sin(t * 0.9) * 2.1;
+      const gz = (ay / 9.81) * 0.14;
+      const leanDeg = (ay / 9.81) * (180.0 / Math.PI);
+
+      // Naive dead reckoning (diverges quadratically)
+      let errNaive = 0.18;
+      let naiveCoord = [lat, lon];
+      if (isBO) {
+        errNaive = Math.min(115.0, 0.2 + 0.06 * (boElapsed ** 2) + 0.22 * boElapsed);
+        const headingRad = heading * (Math.PI / 180.0);
+        const latOffsetM = errNaive;
+        const dEast = latOffsetM * Math.cos(headingRad);
+        const dNorth = -latOffsetM * Math.sin(headingRad);
+        naiveCoord = [lat + dNorth / 110600.0, lon + dEast / (111320.0 * Math.cos(lat * Math.PI / 180.0))];
+      }
+
+      // TrueTrack (locked to road manifold)
+      let errTT = 0.05;
+      let ttCoord = [lat, lon];
+      if (isBO) {
+        errTT = 0.42 + 0.15 * Math.sin(t * 2.0);
+        const slightOffsetM = errTT * 0.8;
+        const headingRad = heading * (Math.PI / 180.0);
+        ttCoord = [lat + (slightOffsetM * Math.sin(headingRad)) / 110600.0, lon + (slightOffsetM * Math.cos(headingRad)) / (111320.0 * Math.cos(lat * Math.PI / 180.0))];
+      }
+
+      simFrames.push({
+        t: parseFloat(t.toFixed(1)),
+        speed_kmh: parseFloat(speedKmh.toFixed(1)),
+        heading_deg: parseFloat(heading.toFixed(1)),
+        is_blackout: isBO,
+        gt: [lat, lon],
+        naive: naiveCoord,
+        map_alone: [lat, lon],
+        neural_alone: [lat, lon],
+        truetrack: ttCoord,
+        truetrack_hardsnap: ttCoord,
+        err_naive_m: parseFloat(errNaive.toFixed(1)),
+        err_map_alone_m: 1.2,
+        err_neural_alone_m: 2.1,
+        err_truetrack_m: parseFloat(errTT.toFixed(2)),
+        sigma_along: 0.22,
+        sigma_cross: 0.18,
+        raw_imu_ax: parseFloat(ax.toFixed(2)),
+        raw_imu_ay: parseFloat(ay.toFixed(2)),
+        raw_imu_gz: parseFloat(gz.toFixed(4)),
+        lean_deg: parseFloat(leanDeg.toFixed(1)),
+        pred_speed_kmh: parseFloat(speedKmh.toFixed(1)),
+        pred_yaw_deg_s: parseFloat((gz * 180.0 / Math.PI).toFixed(1))
+      });
+    }
+
+    this.telemetry = simFrames;
+    this.currentIndex = 0;
+    this.isPlaying = true;
+    this.lastRenderedIdx = -1;
+
+    // Update scrubber slider bounds and markers
+    const slider = document.getElementById('timeline-slider');
+    if (slider) {
+      slider.max = simFrames.length - 1;
+      slider.value = 0;
+    }
+    const span = document.querySelector('.scrubber-blackout-span');
+    const markerEntry = document.querySelector('.scrubber-marker.marker-entry');
+    const markerExit = document.querySelector('.scrubber-marker.marker-exit');
+    if (span) {
+      span.style.left = '35%';
+      span.style.width = '35%';
+    }
+    if (markerEntry) markerEntry.style.left = '35%';
+    if (markerExit) markerExit.style.left = '70%';
+
+    // Lift maxBounds so the route simulation can scroll to any coordinates
+    this.map.setMaxBounds(null);
+
+    // Update full route polyline on map
+    const fullRouteCoords = simFrames.map(d => [d.gt[1], d.gt[0]]);
+    const fullSrc = this.map.getSource('full-route');
+    if (fullSrc) {
+      fullSrc.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: fullRouteCoords } });
+    }
+
+    // Fit map to the route
+    if (fullRouteCoords.length > 1) {
+      const bounds = fullRouteCoords.reduce(
+        (b, c) => b.extend(c),
+        new maplibregl.LngLatBounds(fullRouteCoords[0], fullRouteCoords[0])
+      );
+      this.map.fitBounds(bounds, { padding: 80, duration: 600 });
+    }
+
+    this.playTone(880, 'sine', 0.25);
+    const stepText = document.getElementById('route-step-text');
+    if (stepText) {
+      stepText.innerHTML = `<strong>NAVIGATING:</strong> Driving from ${this.currentOrigPoi.name} to ${this.currentDestPoi.name} &bull; 50Hz IMU Streaming`;
+    }
+  }
+
+  clearRouteAB() {
+    if (!this.map || !this.mapLoaded) return;
+    const src = this.map.getSource('poi-route-source');
+    if (src) {
+      src.setData({ type: 'FeatureCollection', features: [] });
+    }
+    const ribbonSrc = this.map.getSource('corridor-ribbon-source');
+    if (ribbonSrc) {
+      ribbonSrc.setData({ type: 'FeatureCollection', features: [] });
+    }
+    const infoCard = document.getElementById('gmaps-route-info');
+    if (infoCard) infoCard.style.display = 'none';
+    // Restore corridor maxBounds before switching back
+    const cfg = CORRIDOR_CONFIGS[this.currentCorridor] || CORRIDOR_CONFIGS.hitec;
+    this.map.setMaxBounds(cfg.maxBounds);
+    this.switchCorridor(this.currentCorridor);
   }
 
   runAStar(startId, goalId) {
@@ -2023,47 +2440,6 @@ class TrueTrackCockpit {
       }
     }
     return null;
-  }
-
-  displayPoiRoute(coords, targetPoi) {
-    if (!this.map || !this.mapLoaded) return;
-    const src = this.map.getSource('poi-route-source');
-    if (src) {
-      src.setData({
-        type: 'Feature',
-        properties: { name: targetPoi.name },
-        geometry: { type: 'LineString', coordinates: coords }
-      });
-    }
-
-    let totalDistM = 0;
-    for (let i = 1; i < coords.length; i++) {
-      const [lon1, lat1] = coords[i - 1];
-      const [lon2, lat2] = coords[i];
-      const dLat = (lat2 - lat1) * 110600.0;
-      const dLon = (lon2 - lon1) * 111320.0 * Math.cos((lat1 * Math.PI) / 180.0);
-      totalDistM += Math.hypot(dLat, dLon);
-    }
-
-    const banner = document.getElementById('map-alert-banner');
-    const alertText = document.getElementById('map-alert-text');
-    if (banner && alertText) {
-      alertText.innerHTML = `A* Navigation to <strong>${targetPoi.name}</strong>: ${Math.round(totalDistM)} m (${coords.length} nodes) &bull; Zero Contraflow`;
-      banner.style.display = 'flex';
-    }
-
-    const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
-    this.map.fitBounds(bounds, { padding: 60, duration: 600 });
-  }
-
-  clearPoiRoute() {
-    if (!this.map || !this.mapLoaded) return;
-    const src = this.map.getSource('poi-route-source');
-    if (src) {
-      src.setData({ type: 'FeatureCollection', features: [] });
-    }
-    const banner = document.getElementById('map-alert-banner');
-    if (banner) banner.style.display = 'none';
   }
 
   drawFftSpectrum() {

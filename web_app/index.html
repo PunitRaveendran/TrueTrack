@@ -6,7 +6,7 @@
   <title>TrueTrack | Neural-Inertial Navigation Instrument</title>
   <meta name="description" content="On-device neural-inertial dead reckoning and offline map-matching navigation instrument for GPS-denied urban corridors.">
   <link rel="stylesheet" href="lib/maplibre-gl.css">
-  <link rel="stylesheet" href="styles.css?v=round3_v3">
+  <link rel="stylesheet" href="styles.css?v=r5_fix1">
 </head>
 <body class="instrument-root">
 
@@ -40,15 +40,13 @@
           <option value="45_46">Chennai 45/46 Corridor (45s High-Vibration • Pure DR)</option>
         </select>
         <span class="separator">&bull;</span>
-        <select id="select-poi" class="poi-select" title="Select POI Destination for on-device A* routing">
-          <option value="">A* Destination POI...</option>
-          <option value="cyber_towers">Cyber Towers Junction (1.0 km)</option>
-          <option value="trident_hotel">Trident Hotel Hyderabad (1.0 km)</option>
-          <option value="cyber_gateway">Cyber Gateway (574 m)</option>
-          <option value="deloitte_driveway">Deloitte Mindspace (1.2 km)</option>
-          <option value="tcs_deccan_park">TCS Deccan Park (718 m)</option>
-          <option value="paradise_biryani">Paradise Food Court (994 m)</option>
-        </select>
+        <button id="btn-toggle-route-planner" class="btn-quiet active" title="Toggle Google Maps-Style Offline A* Route Planner">
+          <span class="pin-a-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#10b981;margin-right:2px;"></span>
+          <span>A</span>
+          <span style="color:var(--text-muted);">&rarr;</span>
+          <span class="pin-b-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:2px;"></span>
+          <span>B Planner</span>
+        </button>
       </div>
     </div>
 
@@ -91,6 +89,92 @@
       <div id="maplibre-map" class="map-canvas"></div>
       <div class="map-vignette-overlay" pointer-events="none"></div>
 
+      <!-- Google Maps-Style Point A -> Point B Route Planner Card -->
+      <div id="gmaps-planner-card" class="gmaps-planner-card">
+        <div class="gmaps-card-header">
+          <div class="gmaps-title-row">
+            <span class="gmaps-badge-nav">A &rarr; B</span>
+            <span class="gmaps-title">OFFLINE A* ROUTING</span>
+            <span class="gmaps-badge-offline">LOCAL OSM</span>
+          </div>
+          <button id="btn-toggle-planner-collapse" class="btn-planner-collapse" title="Collapse / Expand Route Planner">&minus;</button>
+        </div>
+        
+        <div class="gmaps-card-body" id="planner-card-body">
+          <!-- Point A (Origin) Row -->
+          <div class="gmaps-input-row">
+            <div class="gmaps-pin-dot pin-a" title="Point A (Origin)">A</div>
+            <select id="select-origin" class="gmaps-select" title="Point A: Origin / Starting Location">
+              <option value="raidurg_metro">Raidurg Metro Station (Corridor Origin)</option>
+              <option value="cyber_gateway">Cyber Gateway</option>
+              <option value="cyber_towers">Cyber Towers Junction</option>
+              <option value="trident_hotel">Trident Hotel Hyderabad</option>
+              <option value="deloitte_driveway">Deloitte Mindspace</option>
+              <option value="tcs_deccan_park">TCS Deccan Park</option>
+              <option value="paradise_biryani">Paradise Food Court</option>
+            </select>
+          </div>
+          
+          <!-- Swap Button Row -->
+          <div class="gmaps-swap-row">
+            <div class="gmaps-dots-connector"></div>
+            <button id="btn-swap-ab" class="btn-gmaps-swap" title="Swap Origin & Destination (A &harr; B)">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+                <path fill-rule="evenodd" d="M11.5 15a.5.5 0 0 0 .5-.5V2.707l3.146 3.147a.5.5 0 0 0 .708-.708l-4-4a.5.5 0 0 0-.708 0l-4 4a.5.5 0 1 0 .708.708L11 2.707V14.5a.5.5 0 0 0 .5.5zm-7-14a.5.5 0 0 1 .5.5v11.793l3.146-3.147a.5.5 0 0 1 .708.708l-4 4a.5.5 0 0 1-.708 0l-4-4a.5.5 0 0 1 .708-.708L4 13.293V1.5a.5.5 0 0 1 .5-.5z"/>
+              </svg>
+            </button>
+          </div>
+          
+          <!-- Point B (Destination) Row -->
+          <div class="gmaps-input-row">
+            <div class="gmaps-pin-dot pin-b" title="Point B (Destination)">B</div>
+            <select id="select-destination" class="gmaps-select" title="Point B: Destination Location">
+              <option value="cyber_towers">Cyber Towers Junction (1.0 km)</option>
+              <option value="trident_hotel">Trident Hotel Hyderabad (1.0 km)</option>
+              <option value="cyber_gateway">Cyber Gateway (574 m)</option>
+              <option value="deloitte_driveway">Deloitte Mindspace (1.2 km)</option>
+              <option value="tcs_deccan_park">TCS Deccan Park (718 m)</option>
+              <option value="paradise_biryani">Paradise Food Court (994 m)</option>
+              <option value="raidurg_metro">Raidurg Metro Station</option>
+            </select>
+          </div>
+          
+          <!-- Route Actions Row -->
+          <div class="gmaps-actions-row">
+            <button id="btn-find-route-ab" class="btn-gmaps-primary" title="Calculate offline A* shortest path">
+              <span>FIND ROUTE</span>
+            </button>
+            <button id="btn-start-nav-ab" class="btn-gmaps-success" title="Start simulation navigation along this route">
+              <span>START NAV</span>
+            </button>
+            <button id="btn-clear-ab" class="btn-gmaps-ghost" title="Clear route">
+              <span>CLEAR</span>
+            </button>
+          </div>
+          
+          <!-- Live Route Stats / Turn-by-Turn Card -->
+          <div id="gmaps-route-info" class="gmaps-route-info" style="display: none;">
+            <div class="route-metrics-row">
+              <div class="metric-pill">
+                <span class="m-lbl">Distance</span>
+                <span class="m-val" id="route-dist-val">1,020 m</span>
+              </div>
+              <div class="metric-pill">
+                <span class="m-lbl">Est. Time</span>
+                <span class="m-val" id="route-eta-val">2m 14s</span>
+              </div>
+              <div class="metric-pill">
+                <span class="m-lbl">OSM Graph</span>
+                <span class="m-val" id="route-nodes-val">47 nodes</span>
+              </div>
+            </div>
+            <div class="route-guidance-step" id="route-step-text">
+              Ready to navigate. Zero contraflow enforced.
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Single Subtitle Banner (Context-aware alert, max 1 visible) -->
       <div class="map-alert-banner" id="map-alert-banner" style="display: none;">
         <span class="alert-indicator"></span>
@@ -114,6 +198,35 @@
 
     <!-- Right Column: Precision Readouts & Controls -->
     <aside class="side-panel">
+
+      <!-- ON-DEVICE NPU SPECS CARD -->
+      <section class="panel-section npu-spec-section">
+        <div class="npu-spec-card">
+          <div class="npu-spec-header">
+            <span class="npu-badge-pill">QUALCOMM SM8850</span>
+            <span class="npu-latency-chip">HTP INT8 &bull; 1.4 ms</span>
+          </div>
+          <div class="npu-title">1D-CNN Neural Regressor Spec</div>
+          <div class="npu-metrics-grid">
+            <div class="npu-metric-item">
+              <span class="npu-m-k">Parameters</span>
+              <span class="npu-m-v">25,804</span>
+            </div>
+            <div class="npu-metric-item">
+              <span class="npu-m-k">Quantized Size</span>
+              <span class="npu-m-v">123.7 KB</span>
+            </div>
+            <div class="npu-metric-item">
+              <span class="npu-m-k">Inference Rate</span>
+              <span class="npu-m-v">50 Hz</span>
+            </div>
+            <div class="npu-metric-item">
+              <span class="npu-m-k">Execution Budget</span>
+              <span class="npu-m-v">&lt; 20 ms (14x headroom)</span>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <!-- 5-STAGE PIPELINE ACTIVE STATE INDICATOR -->
       <section class="panel-section pipeline-section">
@@ -237,9 +350,12 @@
             </label>
             <span class="ablation-text">Two-wheeler lean-corrected NHC</span>
           </div>
+        </div><!-- /.ablation-list -->
+      </section><!-- /.ablation-section -->
+
       <!-- INTERACTIVE COCKPIT CONTROLS & LEAN LIGHTBAR (Task 1.7) -->
       <section class="panel-section controls-section">
-        <div class="section-label">Interactive Cockpit & Vehicle Controls</div>
+        <div class="section-label">Interactive Cockpit &amp; Vehicle Controls</div>
 
         <!-- Two-Wheeler Lean NHC Lightbar / Status Badge -->
         <div class="lean-lightbar-container">
@@ -487,6 +603,11 @@
 
     <!-- Speed Selector & Keyboard Hint -->
     <div class="transport-right">
+      <div class="transport-speed-slider-wrap" title="Continuous simulation speed (0.25x to 4.0x)">
+        <span class="speed-slider-lbl">Speed:</span>
+        <input type="range" id="transport-speed-slider" class="speed-slider-mini" min="0.25" max="4.0" step="0.25" value="1.0">
+        <span class="speed-slider-val" id="transport-speed-badge">1.0&times;</span>
+      </div>
       <div class="speed-group">
         <button class="btn-speed active" data-speed="1.0">1x</button>
         <button class="btn-speed" data-speed="2.0">2x</button>
@@ -501,9 +622,9 @@
 
   <!-- Scripts: 100% Offline MapLibre GL & Engines -->
   <script src="lib/maplibre-gl.js"></script>
-  <script src="js/corridor_data.js?v=round4"></script>
-  <script src="js/all_routes_telemetry.js?v=round4"></script>
-  <script src="js/real_telemetry.js?v=round4"></script>
-  <script src="js/navigation_engine.js?v=round4"></script>
+  <script src="js/corridor_data.js?v=r5_fix1"></script>
+  <script src="js/all_routes_telemetry.js?v=r5_fix1"></script>
+  <script src="js/real_telemetry.js?v=r5_fix1"></script>
+  <script src="js/navigation_engine.js?v=r5_fix1"></script>
 </body>
 </html>
